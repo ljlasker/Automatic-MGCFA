@@ -124,12 +124,27 @@ If you see `x must be an object returned by mgcfa_auto()`, pass the full
 ## Summary-Matrix Workflow
 
 ```r
+# Build paper-style summary inputs (e.g., r = 0.45, SD = 1.01)
+sum_in <- mgcfa_make_summary(
+  data = dat,
+  group = "grp",
+  variables = c("x1", "x2", "x3", "x4"),
+  matrix_type = "cor",
+  format = "truncate",
+  cor_digits = 2,
+  sd_digits = 2,
+  mean_digits = 2
+)
+
 out <- mgcfa_auto(
   model_type = "custom",
   model = "g =~ x1 + x2 + x3 + x4",
-  sample_cov = list(cov_g1, cov_g2),
-  sample_mean = list(mean_g1, mean_g2),
-  sample_nobs = list(n_g1, n_g2)
+  sample_cov = sum_in$sample_cov,
+  sample_sd = sum_in$sample_sd,
+  matrices_are_cor = sum_in$matrices_are_cor,
+  sample_mean = sum_in$sample_mean,
+  sample_nobs = sum_in$sample_nobs,
+  group_labels = sum_in$group_labels
 )
 ```
 

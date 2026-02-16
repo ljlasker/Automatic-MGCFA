@@ -88,6 +88,148 @@ mgcfa_build_model <- function(
   )
 }
 
+#' Build Summary Inputs from Raw Data
+#'
+#' Creates group-wise summary inputs compatible with \code{mgcfa_auto()} from
+#' raw data. Optionally applies paper-style decimal formatting (truncate or
+#' round) to correlations/covariances, SDs, and means.
+#'
+#' @param data Data frame containing indicators and a grouping variable.
+#' @param group Grouping variable name in \code{data}.
+#' @param variables Character vector of indicator names.
+#' @param matrix_type One of \code{"cor"} or \code{"cov"}.
+#' @param cor_digits Decimal places for correlation matrices when
+#'   \code{matrix_type = "cor"}. Ignored when \code{NULL}.
+#' @param sd_digits Decimal places for group SD vectors when
+#'   \code{matrix_type = "cor"}. Ignored when \code{NULL}.
+#' @param mean_digits Decimal places for group means. Ignored when \code{NULL}.
+#' @param cov_digits Decimal places for covariance matrices when
+#'   \code{matrix_type = "cov"}. Ignored when \code{NULL}.
+#' @param format Decimal formatting method: \code{"none"},
+#'   \code{"truncate"}, or \code{"round"}.
+#' @param drop_incomplete Logical; if \code{TRUE}, uses complete cases for
+#'   \code{variables} within each group.
+#'
+#' @return A list containing \code{sample_cov}, \code{sample_mean},
+#'   \code{sample_nobs}, and \code{group_labels}, plus \code{matrices_are_cor}
+#'   and \code{sample_sd} (NULL in covariance mode).
+#' @export
+mgcfa_make_summary <- function(
+  data,
+  group,
+  variables,
+  matrix_type = c("cor", "cov"),
+  cor_digits = NULL,
+  sd_digits = NULL,
+  mean_digits = NULL,
+  cov_digits = NULL,
+  format = c("none", "truncate", "round"),
+  drop_incomplete = TRUE
+) {
+  matrix_type <- match.arg(matrix_type)
+  format <- match.arg(format)
+
+  if (!is.data.frame(data)) {
+    stop("`data` must be a data.frame.", call. = FALSE)
+  }
+  if (!is.character(group) || length(group) != 1L || !nzchar(group)) {
+    stop("`group` must be a single non-empty column name.", call. = FALSE)
+  }
+  if (!(group %in% names(data))) {
+    stop("`group` must exist in `data`.", call. = FALSE)
+  }
+  if (is.null(variables) || length(variables) < 2L) {
+    stop("`variables` must contain at least two indicator names.", call. = FALSE)
+  }
+  variables <- as.character(variables)
+  if (!all(variables %in% names(data))) {
+    stop("All `variables` must exist in `data`.", call. = FALSE)
+  }
+  if (!all(vapply(data[variables], is.numeric, logical(1L)))) {
+    stop("All selected `variables` must be numeric.", call. = FALSE)
+  }
+  if (!is.logical(drop_incomplete) || length(drop_incomplete) != 1L || is.na(drop_incomplete)) {
+    stop("`drop_incomplete` must be TRUE or FALSE.", call. = FALSE)
+  }
+
+  g_raw <- data[[group]]
+  if (anyNA(g_raw)) {
+    stop("`group` contains missing values; please remove or recode them first.", call. = FALSE)
+  }
+  g <- as.character(g_raw)
+  groups <- if (is.factor(g_raw)) {
+    lev <- levels(g_raw)
+    lev[lev %in% g]
+  } else {
+    unique(g)
+  }
+  if (length(groups) < 2L) {
+    stop("At least two groups are required to build multi-group summary inputs.", call. = FALSE)
+  }
+
+  sample_cov <- vector("list", length(groups))
+  sample_sd <- if (identical(matrix_type, "cor")) vector("list", length(groups)) else NULL
+  sample_mean <- vector("list", length(groups))
+  sample_nobs <- vector("list", length(groups))
+
+  for (i in seq_along(groups)) {
+    gi <- groups[[i]]
+    dgi <- data[g == gi, variables, drop = FALSE]
+
+    if (isTRUE(drop_incomplete)) {
+      keep <- stats::complete.cases(dgi)
+      dgi <- dgi[keep, , drop = FALSE]
+    }
+
+    n_i <- nrow(dgi)
+    if (n_i < 2L) {
+      stop(sprintf("Group `%s` has fewer than 2 complete rows for `variables`.", gi), call. = FALSE)
+    }
+
+    if (identical(matrix_type, "cor")) {
+      Ri <- stats::cor(dgi)
+      Ri <- .mgcfa_decimal_matrix(
+        Ri,
+        digits = cor_digits,
+        format = format,
+        is_correlation = TRUE
+      )
+
+      sdi <- apply(dgi, 2, stats::sd)
+      sdi <- .mgcfa_decimal_values(sdi, digits = sd_digits, format = format)
+      names(sdi) <- variables
+
+      sample_cov[[i]] <- Ri
+      sample_sd[[i]] <- sdi
+    } else {
+      Si <- stats::cov(dgi)
+      Si <- .mgcfa_decimal_matrix(
+        Si,
+        digits = cov_digits,
+        format = format,
+        is_correlation = FALSE
+      )
+      sample_cov[[i]] <- Si
+    }
+
+    mi <- colMeans(dgi)
+    mi <- .mgcfa_decimal_values(mi, digits = mean_digits, format = format)
+    names(mi) <- variables
+
+    sample_mean[[i]] <- mi
+    sample_nobs[[i]] <- n_i
+  }
+
+  list(
+    sample_cov = sample_cov,
+    sample_sd = sample_sd,
+    sample_mean = sample_mean,
+    sample_nobs = sample_nobs,
+    group_labels = groups,
+    matrices_are_cor = identical(matrix_type, "cor")
+  )
+}
+
 #' Run Automatic MGCFA from Raw Data or Matrices
 #'
 #' Fits a sequential multi-group SEM/CFA invariance workflow with a model
@@ -1238,6 +1380,39 @@ mgcfa_plot_fit <- function(
     return(x)
   }
   stop("`x` must be an object returned by `mgcfa_auto()`.", call. = FALSE)
+}
+
+.mgcfa_decimal_values <- function(x, digits = NULL, format = c("none", "truncate", "round")) {
+  format <- match.arg(format)
+  if (!is.numeric(x) || is.null(digits) || identical(format, "none")) {
+    return(x)
+  }
+  digits <- as.integer(digits)
+  if (length(digits) != 1L || is.na(digits) || digits < 0L) {
+    stop("`digits` must be NULL or a non-negative integer.", call. = FALSE)
+  }
+
+  if (identical(format, "round")) {
+    return(round(x, digits = digits))
+  }
+
+  scale <- 10^digits
+  sign(x) * floor(abs(x) * scale) / scale
+}
+
+.mgcfa_decimal_matrix <- function(m, digits = NULL, format = c("none", "truncate", "round"), is_correlation = FALSE) {
+  if (!is.matrix(m)) {
+    stop("`m` must be a matrix.", call. = FALSE)
+  }
+  out <- .mgcfa_decimal_values(m, digits = digits, format = format)
+  out <- (out + t(out)) / 2
+  if (isTRUE(is_correlation)) {
+    diag(out) <- 1
+    out[out > 1] <- 1
+    out[out < -1] <- -1
+  }
+  dimnames(out) <- dimnames(m)
+  out
 }
 
 .mgcfa_round_values <- function(x, digits = 3L, rounding = c("signif", "round", "none")) {
