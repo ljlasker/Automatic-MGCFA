@@ -1,0 +1,21 @@
+Package: AutomaticMGCFA
+Type: Package
+Title: Automatic Multi-Group CFA and SEM Invariance Workflows
+Version: 0.1.0
+Authors@R: person(given = "ljlasker", family = "ljlasker", role = c("aut", "cre"), email = "ljlasker@users.noreply.github.com")
+Description: Automates multi-group CFA and SEM invariance workflows from
+    raw data or summary covariance/correlation matrices. Supports custom
+    lavaan syntax and model builders from single-factor templates and
+    thresholded exploratory EFA/PCA loadings, including partial invariance
+    constraints.
+License: MIT
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Imports:
+    stats,
+    lavaan,
+    psych
+Suggests:
+    ggplot2
