@@ -95,6 +95,12 @@ out_with_fully_free <- mgcfa_auto(
 
 # Note: for one-latent `lv.variances`/`means` stages, the fully freed
 # exploratory candidate is evaluated automatically.
+
+# Test mean invariance without constraining latent variances
+out_means_free_lvvar <- mgcfa_auto(
+  ...,
+  means_constrain_lv_variances = FALSE
+)
 ```
 
 ## Fit-Improvement Graphics

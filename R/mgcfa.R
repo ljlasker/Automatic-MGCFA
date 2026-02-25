@@ -321,6 +321,9 @@ mgcfa_make_summary <- function(
 #'   \code{"lv.variances"} and \code{"means"} with exactly one releasable term,
 #'   the fully freed candidate is evaluated automatically as an exploratory
 #'   comparison even when this argument is \code{FALSE}.
+#' @param means_constrain_lv_variances Logical; if \code{TRUE} (default), the
+#'   \code{"means"} stage also constrains latent variances. If \code{FALSE},
+#'   latent variances are left unconstrained while testing mean invariance.
 #' @param stop_at_first_unacceptable Logical; if \code{TRUE}, stop fitting
 #'   higher invariance stages after the first constrained stage that remains
 #'   unacceptable relative to the previous fitted stage.
@@ -369,6 +372,7 @@ mgcfa_auto <- function(
   partial_search_exhaustive_steps = c("lv.variances", "means"),
   partial_search_max_models = 5000L,
   partial_search_allow_full_release = FALSE,
+  means_constrain_lv_variances = TRUE,
   stop_at_first_unacceptable = TRUE
 ) {
   if (!requireNamespace("lavaan", quietly = TRUE)) {
@@ -453,6 +457,11 @@ mgcfa_auto <- function(
       length(partial_search_allow_full_release) != 1L ||
       is.na(partial_search_allow_full_release)) {
     stop("`partial_search_allow_full_release` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(means_constrain_lv_variances) ||
+      length(means_constrain_lv_variances) != 1L ||
+      is.na(means_constrain_lv_variances)) {
+    stop("`means_constrain_lv_variances` must be TRUE or FALSE.", call. = FALSE)
   }
   partial_search_exhaustive_steps <- unique(match.arg(
     partial_search_exhaustive_steps,
@@ -559,13 +568,18 @@ mgcfa_auto <- function(
     }
   }
 
+  means_equal <- c("loadings", "intercepts", "residuals", "means")
+  if (isTRUE(means_constrain_lv_variances)) {
+    means_equal <- c("loadings", "intercepts", "residuals", "lv.variances", "means")
+  }
+
   step_equal <- list(
     configural = NULL,
     metric = c("loadings"),
     scalar = c("loadings", "intercepts"),
     strict = c("loadings", "intercepts", "residuals"),
     "lv.variances" = c("loadings", "intercepts", "residuals", "lv.variances"),
-    means = c("loadings", "intercepts", "residuals", "lv.variances", "means")
+    means = means_equal
   )
 
   fits <- list()
@@ -584,9 +598,15 @@ mgcfa_auto <- function(
   for (i in seq_along(include_steps)) {
     step <- include_steps[[i]]
     prev_step <- if (i > 1L) include_steps[[i - 1L]] else NULL
-    prev_fit <- if (!is.null(prev_step)) fits[[prev_step]] else NULL
+    eval_prev_step <- prev_step
+    if (identical(step, "means") &&
+        !isTRUE(means_constrain_lv_variances) &&
+        ("strict" %in% names(fits))) {
+      eval_prev_step <- "strict"
+    }
+    prev_fit <- if (!is.null(eval_prev_step)) fits[[eval_prev_step]] else NULL
     geq <- step_equal[[step]]
-    added_constraints <- .mgcfa_added_constraints(step_equal, step = step, prev_step = prev_step)
+    added_constraints <- .mgcfa_added_constraints(step_equal, step = step, prev_step = eval_prev_step)
 
     step_partial <- character()
     if (!is.null(partial) && !is.null(partial[[step]])) {
@@ -633,7 +653,7 @@ mgcfa_auto <- function(
           threshold = partial_failure_threshold,
           value = NA_real_,
           gap = NA_real_,
-          from_step = prev_step,
+          from_step = eval_prev_step,
           to_step = step,
           failed_fit = NULL,
           failed_fit_measures = NULL
@@ -757,7 +777,7 @@ mgcfa_auto <- function(
         threshold = step_eval$threshold,
         value = step_eval$value,
         gap = step_eval$gap,
-        from_step = prev_step,
+        from_step = eval_prev_step,
         to_step = step,
         failed_fit = if (isTRUE(step_eval$pass)) NULL else fit_or_error,
         failed_fit_measures = if (isTRUE(step_eval$pass)) NULL else lavaan::fitMeasures(fit_or_error, fit_measures),
@@ -859,7 +879,12 @@ mgcfa_auto <- function(
           }
         }
 
-        if (isTRUE(stop_at_first_unacceptable) && !isTRUE(step_acceptable)) {
+        remaining_steps <- if (i < length(include_steps)) include_steps[(i + 1L):length(include_steps)] else character()
+        keep_testing_means <- identical(step, "lv.variances") &&
+          !isTRUE(means_constrain_lv_variances) &&
+          ("means" %in% remaining_steps)
+
+        if (isTRUE(stop_at_first_unacceptable) && !isTRUE(step_acceptable) && !isTRUE(keep_testing_means)) {
           stopped_early <- TRUE
           stopped_after_step <- step
           stopped_reason <- sprintf(

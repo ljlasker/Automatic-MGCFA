@@ -47,6 +47,7 @@ mgcfa_auto(
   partial_search_exhaustive_steps = c("lv.variances", "means"),
   partial_search_max_models = 5000L,
   partial_search_allow_full_release = FALSE,
+  means_constrain_lv_variances = TRUE,
   stop_at_first_unacceptable = TRUE
 )
 }
@@ -181,6 +182,10 @@ invariance-stage recoveries. For \code{"lv.variances"} and \code{"means"}
 with exactly one releasable term, the fully freed candidate is evaluated
 automatically as an exploratory comparison even when this argument is
 \code{FALSE}.}
+
+\item{means_constrain_lv_variances}{If \code{TRUE} (default), the
+\code{"means"} stage also constrains latent variances. If \code{FALSE},
+latent variances are left unconstrained while testing mean invariance.}
 
 \item{stop_at_first_unacceptable}{If \code{TRUE}, stop fitting higher
 invariance stages after the first constrained stage that remains
