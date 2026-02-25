@@ -177,7 +177,10 @@ during automatic partial search for a step.}
 \item{partial_search_allow_full_release}{If \code{TRUE}, allow candidate models
 that free all step-specific equality constraints. These candidates are flagged
 as \code{stage_reached = FALSE} and are not counted as acceptable
-invariance-stage recoveries.}
+invariance-stage recoveries. For \code{"lv.variances"} and \code{"means"}
+with exactly one releasable term, the fully freed candidate is evaluated
+automatically as an exploratory comparison even when this argument is
+\code{FALSE}.}
 
 \item{stop_at_first_unacceptable}{If \code{TRUE}, stop fitting higher
 invariance stages after the first constrained stage that remains

@@ -317,7 +317,10 @@ mgcfa_make_summary <- function(
 #' @param partial_search_allow_full_release Logical; if \code{TRUE}, allow
 #'   candidate models that free all step-specific equality constraints. These
 #'   candidates are flagged as \code{stage_reached = FALSE} and are not counted
-#'   as acceptable invariance-stage recoveries.
+#'   as acceptable invariance-stage recoveries. For
+#'   \code{"lv.variances"} and \code{"means"} with exactly one releasable term,
+#'   the fully freed candidate is evaluated automatically as an exploratory
+#'   comparison even when this argument is \code{FALSE}.
 #' @param stop_at_first_unacceptable Logical; if \code{TRUE}, stop fitting
 #'   higher invariance stages after the first constrained stage that remains
 #'   unacceptable relative to the previous fitted stage.
@@ -1815,7 +1818,7 @@ mgcfa_plot_fit <- function(
 
   base_partial <- .mgcfa_normalize_terms(base_partial %||% character())
   added_constraints <- unique(as.character(added_constraints %||% character()))
-  min_remaining <- if (isTRUE(allow_full_release)) 0L else 1L
+  force_single_release_test <- FALSE
   truncated <- FALSE
 
   args0 <- c(
@@ -1858,6 +1861,10 @@ mgcfa_plot_fit <- function(
   start_candidates <- if (identical(candidate_source, "all")) all_candidates else score_candidates
   releasable_terms <- unique(as.character(start_candidates$term))
   n_releasable <- length(releasable_terms)
+  force_single_release_test <- !isTRUE(allow_full_release) &&
+    n_releasable == 1L &&
+    (step %in% c("lv.variances", "means"))
+  min_remaining <- if (isTRUE(allow_full_release) || isTRUE(force_single_release_test)) 0L else 1L
   score_lookup <- if (nrow(score_candidates) > 0L) {
     tapply(score_candidates$x2, score_candidates$term, max, na.rm = TRUE)
   } else {
@@ -2096,6 +2103,7 @@ mgcfa_plot_fit <- function(
     added_constraints = added_constraints,
     candidate_source = candidate_source,
     allow_full_release = isTRUE(allow_full_release),
+    forced_single_release_test = isTRUE(force_single_release_test),
     total_releasable = as.integer(n_releasable),
     min_active_constraints = as.integer(min_remaining),
     max_free_allowed = as.integer(max_free),

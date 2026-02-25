@@ -92,6 +92,9 @@ out_with_fully_free <- mgcfa_auto(
   ...,
   partial_search_allow_full_release = TRUE
 )
+
+# Note: for one-latent `lv.variances`/`means` stages, the fully freed
+# exploratory candidate is evaluated automatically.
 ```
 
 ## Fit-Improvement Graphics
