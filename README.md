@@ -86,6 +86,12 @@ out_all_terms <- mgcfa_auto(
   partial_search_stop_on_accept = FALSE,
   partial_search_max_models = 20000L
 )
+
+# Include fully free exploratory candidates (flagged as stage_not_reached)
+out_with_fully_free <- mgcfa_auto(
+  ...,
+  partial_search_allow_full_release = TRUE
+)
 ```
 
 ## Fit-Improvement Graphics

@@ -295,8 +295,7 @@ mgcfa_make_summary <- function(
 #'   \code{"aic_bic_weight"}. The AIC weight is
 #'   \code{1 - partial_ic_bic_weight}.
 #' @param partial_search_max_free Maximum number of additional constraints to
-#'   free during automatic partial search at the failed step. The algorithm
-#'   always retains at least one active equality constraint for that step.
+#'   free during automatic partial search at the failed step.
 #' @param partial_search_top_n Number of closest candidate models returned from
 #'   partial search.
 #' @param partial_search_stop_on_accept Logical; stop search at first acceptable
@@ -315,6 +314,10 @@ mgcfa_make_summary <- function(
 #'   Defaults to \code{c("lv.variances", "means")}.
 #' @param partial_search_max_models Maximum number of candidate models evaluated
 #'   during automatic partial search for a step.
+#' @param partial_search_allow_full_release Logical; if \code{TRUE}, allow
+#'   candidate models that free all step-specific equality constraints. These
+#'   candidates are flagged as \code{stage_reached = FALSE} and are not counted
+#'   as acceptable invariance-stage recoveries.
 #' @param stop_at_first_unacceptable Logical; if \code{TRUE}, stop fitting
 #'   higher invariance stages after the first constrained stage that remains
 #'   unacceptable relative to the previous fitted stage.
@@ -362,6 +365,7 @@ mgcfa_auto <- function(
   partial_search_candidate_source = c("auto", "score", "all"),
   partial_search_exhaustive_steps = c("lv.variances", "means"),
   partial_search_max_models = 5000L,
+  partial_search_allow_full_release = FALSE,
   stop_at_first_unacceptable = TRUE
 ) {
   if (!requireNamespace("lavaan", quietly = TRUE)) {
@@ -441,6 +445,11 @@ mgcfa_auto <- function(
   partial_search_max_models <- as.integer(partial_search_max_models)
   if (is.na(partial_search_max_models) || partial_search_max_models < 1L) {
     stop("`partial_search_max_models` must be a positive integer.", call. = FALSE)
+  }
+  if (!is.logical(partial_search_allow_full_release) ||
+      length(partial_search_allow_full_release) != 1L ||
+      is.na(partial_search_allow_full_release)) {
+    stop("`partial_search_allow_full_release` must be TRUE or FALSE.", call. = FALSE)
   }
   partial_search_exhaustive_steps <- unique(match.arg(
     partial_search_exhaustive_steps,
@@ -672,6 +681,7 @@ mgcfa_auto <- function(
             use_best_if_no_pass = isTRUE(partial_search_use_best_if_no_pass),
             candidate_source = step_candidate_source,
             max_models = partial_search_max_models,
+            allow_full_release = isTRUE(partial_search_allow_full_release),
             fit_measures = fit_measures
           )
           search_out$triggered <- TRUE
@@ -707,7 +717,8 @@ mgcfa_auto <- function(
             selected_partial = character(),
             selected_index = NA_integer_,
             selected_fit = NULL,
-            selected_added_terms = character()
+            selected_added_terms = character(),
+            selected_stage_reached = NA
           )
           partial_searches[[step]] <- search_out
         }
@@ -800,6 +811,7 @@ mgcfa_auto <- function(
             use_best_if_no_pass = isTRUE(partial_search_use_best_if_no_pass),
             candidate_source = step_candidate_source,
             max_models = partial_search_max_models,
+            allow_full_release = isTRUE(partial_search_allow_full_release),
             fit_measures = fit_measures
           )
           search_out$triggered <- TRUE
@@ -835,7 +847,8 @@ mgcfa_auto <- function(
             selected_partial = character(),
             selected_index = NA_integer_,
             selected_fit = NULL,
-            selected_added_terms = character()
+            selected_added_terms = character(),
+            selected_stage_reached = NA
           )
           partial_searches[[step]] <- search_out
           if (is.null(partial_search)) {
@@ -1026,6 +1039,10 @@ print.mgcfa_result <- function(
       cat("Selected partial constraints:\n")
       cat(paste(single_partial$selected_partial, collapse = ", "), "\n")
     }
+    if (!is.null(single_partial$selected_stage_reached) &&
+        identical(single_partial$selected_stage_reached, FALSE)) {
+      cat("Selected candidate is exploratory (stage not reached: all step constraints freed).\n")
+    }
   }
 
   if (!is.null(x$partial_searches) && length(x$partial_searches) > 0L) {
@@ -1038,6 +1055,9 @@ print.mgcfa_result <- function(
       }
       if (!is.null(s$selected_partial) && length(s$selected_partial) > 0L) {
         cat("  selected constraints:", paste(s$selected_partial, collapse = ", "), "\n")
+      }
+      if (!is.null(s$selected_stage_reached) && identical(s$selected_stage_reached, FALSE)) {
+        cat("  selected: exploratory (stage not reached)\n")
       }
     }
   }
@@ -1777,6 +1797,7 @@ mgcfa_plot_fit <- function(
   use_best_if_no_pass,
   candidate_source,
   max_models,
+  allow_full_release,
   fit_measures
 ) {
   criterion <- match.arg(criterion, choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change"))
@@ -1787,13 +1808,14 @@ mgcfa_plot_fit <- function(
   if (is.na(max_models) || max_models < 1L) {
     max_models <- 5000L
   }
+  allow_full_release <- isTRUE(allow_full_release)
   if (is.null(threshold)) {
     threshold <- .mgcfa_default_partial_threshold(criterion)
   }
 
   base_partial <- .mgcfa_normalize_terms(base_partial %||% character())
   added_constraints <- unique(as.character(added_constraints %||% character()))
-  min_remaining <- 1L
+  min_remaining <- if (isTRUE(allow_full_release)) 0L else 1L
   truncated <- FALSE
 
   args0 <- c(
@@ -1931,6 +1953,9 @@ mgcfa_plot_fit <- function(
         fit_stats <- lavaan::fitMeasures(fit_or_error, c("chisq", "df", "cfi", "aic", "bic"))
       }
 
+      stage_reached_i <- if (n_releasable <= 0L) TRUE else (length(added_terms) < n_releasable)
+      stage_acceptable_i <- is_ok && isTRUE(step_eval$pass) && isTRUE(stage_reached_i)
+
       candidate_rows[[length(candidate_rows) + 1L]] <- data.frame(
         iteration = iter_id,
         step = step,
@@ -1946,6 +1971,9 @@ mgcfa_plot_fit <- function(
         threshold = threshold,
         criterion_gap = as.numeric(step_eval$gap),
         pass = isTRUE(step_eval$pass),
+        stage_reached = isTRUE(stage_reached_i),
+        stage_not_reached = !isTRUE(stage_reached_i),
+        stage_acceptable = isTRUE(stage_acceptable_i),
         chisq = as.numeric(fit_stats[["chisq"]]),
         df = as.numeric(fit_stats[["df"]]),
         cfi = as.numeric(fit_stats[["cfi"]]),
@@ -1959,7 +1987,7 @@ mgcfa_plot_fit <- function(
       candidate_partials[[length(candidate_partials) + 1L]] <- partial_now
       candidate_added[[length(candidate_added) + 1L]] <- added_terms
 
-      if (is_ok && isTRUE(step_eval$pass)) {
+      if (isTRUE(stage_acceptable_i)) {
         pass_found_k <- TRUE
       }
     }
@@ -2037,7 +2065,13 @@ mgcfa_plot_fit <- function(
     candidates[0, , drop = FALSE]
   }
 
-  pass_idx <- which(candidates$status == "ok" & candidates$pass)
+  stage_pass <- if ("stage_acceptable" %in% names(candidates)) {
+    as.logical(candidates$stage_acceptable)
+  } else {
+    candidates$status == "ok" & candidates$pass
+  }
+  stage_pass[is.na(stage_pass)] <- FALSE
+  pass_idx <- which(stage_pass)
   selected_idx <- NA_integer_
   if (length(pass_idx) > 0L) {
     selected_idx <- if (isTRUE(stop_on_accept)) {
@@ -2061,7 +2095,9 @@ mgcfa_plot_fit <- function(
     step = step,
     added_constraints = added_constraints,
     candidate_source = candidate_source,
+    allow_full_release = isTRUE(allow_full_release),
     total_releasable = as.integer(n_releasable),
+    min_active_constraints = as.integer(min_remaining),
     max_free_allowed = as.integer(max_free),
     max_models = max_models,
     truncated = isTRUE(truncated),
@@ -2079,7 +2115,8 @@ mgcfa_plot_fit <- function(
     selected_fit = selected_fit,
     selected_partial = selected_partial,
     selected_added_terms = selected_added_terms,
-    selected_is_acceptable = if (!is.na(selected_idx)) isTRUE(candidates$pass[[selected_idx]]) else FALSE,
+    selected_stage_reached = if (!is.na(selected_idx)) isTRUE(candidates$stage_reached[[selected_idx]]) else NA,
+    selected_is_acceptable = if (!is.na(selected_idx)) isTRUE(stage_pass[[selected_idx]]) else FALSE,
     top_fits = if (length(top_idx) > 0L) candidate_fits[top_idx] else list(),
     closest_fits = if (length(closest_idx) > 0L) candidate_fits[closest_idx] else list()
   )
@@ -2311,7 +2348,13 @@ mgcfa_plot_fit <- function(
   gap_best <- gap
   gap_best[!is.finite(gap_best)] <- -Inf
   n_added <- as.numeric(candidates$n_added[ok_idx])
-  pass_penalty <- ifelse(candidates$pass[ok_idx], 0L, 1L)
+  pass_ok <- if ("stage_acceptable" %in% names(candidates)) {
+    as.logical(candidates$stage_acceptable[ok_idx])
+  } else {
+    as.logical(candidates$pass[ok_idx])
+  }
+  pass_ok[is.na(pass_ok)] <- FALSE
+  pass_penalty <- ifelse(pass_ok, 0L, 1L)
 
   ord <- if (identical(rank, "closest")) {
     order(pass_penalty, gap_abs, n_added, na.last = TRUE)
@@ -2325,7 +2368,11 @@ mgcfa_plot_fit <- function(
   if (is.null(candidates) || nrow(candidates) == 0L) {
     return(integer())
   }
-  ok_pass_idx <- which(candidates$status == "ok" & candidates$pass)
+  if ("stage_acceptable" %in% names(candidates)) {
+    ok_pass_idx <- which(candidates$status == "ok" & as.logical(candidates$stage_acceptable))
+  } else {
+    ok_pass_idx <- which(candidates$status == "ok" & candidates$pass)
+  }
   if (length(ok_pass_idx) == 0L) {
     return(integer())
   }

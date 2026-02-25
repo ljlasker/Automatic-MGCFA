@@ -46,6 +46,7 @@ mgcfa_auto(
   partial_search_candidate_source = c("auto", "score", "all"),
   partial_search_exhaustive_steps = c("lv.variances", "means"),
   partial_search_max_models = 5000L,
+  partial_search_allow_full_release = FALSE,
   stop_at_first_unacceptable = TRUE
 )
 }
@@ -146,8 +147,7 @@ search. One of \code{"chisq_pvalue"}, \code{"delta_cfi"},
 \code{1 - partial_ic_bic_weight}.}
 
 \item{partial_search_max_free}{Maximum number of additional constraints to free
-during automatic partial search at a failed step. The algorithm retains at
-least one active equality constraint for that step.}
+during automatic partial search at a failed step.}
 
 \item{partial_search_top_n}{Number of closest candidate models to return.}
 
@@ -173,6 +173,11 @@ release-term enumeration when
 
 \item{partial_search_max_models}{Maximum number of candidate models evaluated
 during automatic partial search for a step.}
+
+\item{partial_search_allow_full_release}{If \code{TRUE}, allow candidate models
+that free all step-specific equality constraints. These candidates are flagged
+as \code{stage_reached = FALSE} and are not counted as acceptable
+invariance-stage recoveries.}
 
 \item{stop_at_first_unacceptable}{If \code{TRUE}, stop fitting higher
 invariance stages after the first constrained stage that remains
@@ -221,7 +226,10 @@ thresholded loading retention.
 If a constrained invariance step fails, \code{mgcfa_auto()} can prompt for or
 automatically run a partial-model search for that step. The search frees
 eligible equality constraints iteratively, prioritizes acceptable candidates
-with fewer freed constraints, and will not free all constraints for a level.
+with fewer freed constraints. By default it retains at least one active
+equality constraint for a level; setting
+\code{partial_search_allow_full_release = TRUE} includes fully free
+exploratory candidates (flagged as stage not reached).
 By default, latent-variance and latent-mean stages use exhaustive candidate
 enumeration in automatic mode.
 }
