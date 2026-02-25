@@ -93,8 +93,34 @@ out_with_fully_free <- mgcfa_auto(
   partial_search_allow_full_release = TRUE
 )
 
+# Allow fully free candidates to be selected as eligible fallback models
+out_with_fully_free_fallback <- mgcfa_auto(
+  ...,
+  partial_search_allow_full_release = TRUE,
+  partial_search_full_release_action = "eligible"
+)
+
 # Note: for one-latent `lv.variances`/`means` stages, the fully freed
 # exploratory candidate is evaluated automatically.
+
+# Multi-metric voting (3 rules, require at least 2 to pass)
+out_multi_rule <- mgcfa_auto(
+  ...,
+  partial_failure_rules = list(
+    list(criterion = "chisq_pvalue", threshold = 0.05),
+    list(criterion = "delta_cfi", threshold = 0.01),
+    list(criterion = "measure_change", measure = "aic", direction = "decrease", threshold = 0)
+  ),
+  partial_failure_rule_policy = "at_least",
+  partial_failure_rule_min = 2L,
+  partial_search_rules = list(
+    list(criterion = "chisq_pvalue", threshold = 0.05),
+    list(criterion = "delta_cfi", threshold = 0.01),
+    list(criterion = "measure_change", measure = "aic", direction = "decrease", threshold = 0)
+  ),
+  partial_search_rule_policy = "at_least",
+  partial_search_rule_min = 2L
+)
 
 # Test mean invariance without constraining latent variances
 out_means_free_lvvar <- mgcfa_auto(

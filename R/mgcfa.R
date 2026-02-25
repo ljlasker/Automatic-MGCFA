@@ -277,6 +277,15 @@ mgcfa_make_summary <- function(
 #'   \code{partial_failure_criterion = "measure_change"}.
 #' @param partial_failure_direction Direction used when
 #'   \code{partial_failure_criterion = "measure_change"}.
+#' @param partial_failure_rules Optional list of rule objects for multi-metric
+#'   failure decisions. Each rule is a named list with at least
+#'   \code{criterion}, and optionally \code{threshold}, \code{measure},
+#'   \code{direction}, and \code{ic_bic_weight}.
+#' @param partial_failure_rule_policy Aggregation policy for multi-rule failure
+#'   decisions: \code{"all"}, \code{"majority"}, \code{"any"}, or
+#'   \code{"at_least"}.
+#' @param partial_failure_rule_min Minimum number of passing rules required when
+#'   \code{partial_failure_rule_policy = "at_least"}.
 #' @param partial_auto_search Behavior when a constrained step fails:
 #'   \code{"prompt"}, \code{"never"}, or \code{"always"}.
 #' @param partial_search_criterion Criterion used during automatic partial
@@ -304,6 +313,14 @@ mgcfa_make_summary <- function(
 #'   \code{"closest"} or \code{"best"}.
 #' @param partial_search_use_best_if_no_pass Logical; if no candidate meets the
 #'   threshold, continue invariance testing using the best ranked candidate.
+#' @param partial_search_rules Optional list of rule objects for multi-metric
+#'   partial-search acceptance decisions. Rule format matches
+#'   \code{partial_failure_rules}.
+#' @param partial_search_rule_policy Aggregation policy for multi-rule search
+#'   decisions: \code{"all"}, \code{"majority"}, \code{"any"}, or
+#'   \code{"at_least"}.
+#' @param partial_search_rule_min Minimum number of passing rules required when
+#'   \code{partial_search_rule_policy = "at_least"}.
 #' @param partial_search_candidate_source Candidate release-term source.
 #'   \code{"score"} uses only score-test releasable constraints,
 #'   \code{"all"} uses all releasable equality terms detected for the step,
@@ -316,11 +333,16 @@ mgcfa_make_summary <- function(
 #'   during automatic partial search for a step.
 #' @param partial_search_allow_full_release Logical; if \code{TRUE}, allow
 #'   candidate models that free all step-specific equality constraints. These
-#'   candidates are flagged as \code{stage_reached = FALSE} and are not counted
-#'   as acceptable invariance-stage recoveries. For
+#'   candidates are flagged as \code{stage_reached = FALSE}. Whether they are
+#'   treated as acceptable fallbacks is controlled by
+#'   \code{partial_search_full_release_action}. For
 #'   \code{"lv.variances"} and \code{"means"} with exactly one releasable term,
 #'   the fully freed candidate is evaluated automatically as an exploratory
 #'   comparison even when this argument is \code{FALSE}.
+#' @param partial_search_full_release_action How fully freed candidates are
+#'   treated when included. \code{"exploratory"} keeps them non-acceptable
+#'   (stage-not-reached), while \code{"eligible"} allows them to be selected as
+#'   acceptable fallbacks when decision rules pass.
 #' @param means_constrain_lv_variances Logical; if \code{TRUE} (default), the
 #'   \code{"means"} stage also constrains latent variances. If \code{FALSE},
 #'   latent variances are left unconstrained while testing mean invariance.
@@ -357,6 +379,9 @@ mgcfa_auto <- function(
   partial_failure_threshold = NULL,
   partial_failure_measure = "aic",
   partial_failure_direction = c("decrease", "increase"),
+  partial_failure_rules = NULL,
+  partial_failure_rule_policy = c("all", "majority", "any", "at_least"),
+  partial_failure_rule_min = NULL,
   partial_auto_search = c("prompt", "never", "always"),
   partial_search_criterion = NULL,
   partial_search_threshold = NULL,
@@ -368,10 +393,14 @@ mgcfa_auto <- function(
   partial_search_stop_on_accept = TRUE,
   partial_search_rank = c("closest", "best"),
   partial_search_use_best_if_no_pass = TRUE,
+  partial_search_rules = NULL,
+  partial_search_rule_policy = c("all", "majority", "any", "at_least"),
+  partial_search_rule_min = NULL,
   partial_search_candidate_source = c("auto", "score", "all"),
   partial_search_exhaustive_steps = c("lv.variances", "means"),
   partial_search_max_models = 5000L,
   partial_search_allow_full_release = FALSE,
+  partial_search_full_release_action = c("exploratory", "eligible"),
   means_constrain_lv_variances = TRUE,
   stop_at_first_unacceptable = TRUE
 ) {
@@ -387,9 +416,12 @@ mgcfa_auto <- function(
     choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change", "none")
   )
   partial_failure_direction <- match.arg(partial_failure_direction)
+  partial_failure_rule_policy <- match.arg(partial_failure_rule_policy, choices = c("all", "majority", "any", "at_least"))
   partial_auto_search <- match.arg(partial_auto_search, choices = c("prompt", "never", "always"))
   partial_search_rank <- match.arg(partial_search_rank)
+  partial_search_rule_policy <- match.arg(partial_search_rule_policy, choices = c("all", "majority", "any", "at_least"))
   partial_search_candidate_source <- match.arg(partial_search_candidate_source, choices = c("auto", "score", "all"))
+  partial_search_full_release_action <- match.arg(partial_search_full_release_action, choices = c("exploratory", "eligible"))
 
   if (!is.null(partial_search_criterion)) {
     partial_search_criterion <- match.arg(
@@ -457,6 +489,18 @@ mgcfa_auto <- function(
       length(partial_search_allow_full_release) != 1L ||
       is.na(partial_search_allow_full_release)) {
     stop("`partial_search_allow_full_release` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.null(partial_failure_rule_min)) {
+    partial_failure_rule_min <- as.integer(partial_failure_rule_min)
+    if (is.na(partial_failure_rule_min) || partial_failure_rule_min < 1L) {
+      stop("`partial_failure_rule_min` must be NULL or a positive integer.", call. = FALSE)
+    }
+  }
+  if (!is.null(partial_search_rule_min)) {
+    partial_search_rule_min <- as.integer(partial_search_rule_min)
+    if (is.na(partial_search_rule_min) || partial_search_rule_min < 1L) {
+      stop("`partial_search_rule_min` must be NULL or a positive integer.", call. = FALSE)
+    }
   }
   if (!is.logical(means_constrain_lv_variances) ||
       length(means_constrain_lv_variances) != 1L ||
@@ -582,6 +626,54 @@ mgcfa_auto <- function(
     means = means_equal
   )
 
+  failure_eval_enabled <- !is.null(partial_failure_rules) || partial_failure_criterion != "none"
+  failure_rule_set <- .mgcfa_resolve_rule_set(
+    rules = partial_failure_rules,
+    criterion = if (partial_failure_criterion == "none") "chisq_pvalue" else partial_failure_criterion,
+    threshold = partial_failure_threshold,
+    measure = partial_failure_measure,
+    direction = partial_failure_direction,
+    ic_bic_weight = partial_ic_bic_weight
+  )
+  failure_criterion_label <- if (length(failure_rule_set) > 1L) "multi_rule" else failure_rule_set[[1L]]$criterion
+  failure_threshold_display <- if (length(failure_rule_set) > 1L) {
+    as.numeric(.mgcfa_required_passes(length(failure_rule_set), policy = partial_failure_rule_policy, min_pass = partial_failure_rule_min) / length(failure_rule_set))
+  } else {
+    as.numeric(failure_rule_set[[1L]]$threshold)
+  }
+
+  search_has_single_overrides <- !is.null(partial_search_criterion) ||
+    !is.null(partial_search_threshold) ||
+    !is.null(partial_search_measure) ||
+    !is.null(partial_search_direction)
+  default_search_rules <- if (!is.null(partial_search_rules)) {
+    .mgcfa_resolve_rule_set(
+      rules = partial_search_rules,
+      criterion = partial_search_criterion %||% "chisq_pvalue",
+      threshold = partial_search_threshold,
+      measure = partial_search_measure %||% partial_failure_measure,
+      direction = partial_search_direction %||% partial_failure_direction,
+      ic_bic_weight = partial_ic_bic_weight
+    )
+  } else if (!is.null(partial_failure_rules) && !isTRUE(search_has_single_overrides)) {
+    failure_rule_set
+  } else {
+    .mgcfa_resolve_rule_set(
+      rules = NULL,
+      criterion = partial_search_criterion %||% "chisq_pvalue",
+      threshold = partial_search_threshold,
+      measure = partial_search_measure %||% partial_failure_measure,
+      direction = partial_search_direction %||% partial_failure_direction,
+      ic_bic_weight = partial_ic_bic_weight
+    )
+  }
+  search_criterion_label <- if (length(default_search_rules) > 1L) "multi_rule" else default_search_rules[[1L]]$criterion
+  search_threshold_display <- if (length(default_search_rules) > 1L) {
+    as.numeric(.mgcfa_required_passes(length(default_search_rules), policy = partial_search_rule_policy, min_pass = partial_search_rule_min) / length(default_search_rules))
+  } else {
+    as.numeric(default_search_rules[[1L]]$threshold)
+  }
+
   fits <- list()
   step_failures <- list()
   partial_searches <- list()
@@ -644,19 +736,23 @@ mgcfa_auto <- function(
     )
 
     if (inherits(fit_or_error, "error")) {
-      can_evaluate <- !is.null(prev_fit) && !is.null(geq) && partial_failure_criterion != "none"
+      can_evaluate <- !is.null(prev_fit) && !is.null(geq) && isTRUE(failure_eval_enabled)
       if (can_evaluate) {
         fail_info <- list(
           failed = TRUE,
           reason = fit_or_error$message,
-          criterion = partial_failure_criterion,
-          threshold = partial_failure_threshold,
+          criterion = failure_criterion_label,
+          threshold = failure_threshold_display,
           value = NA_real_,
           gap = NA_real_,
           from_step = eval_prev_step,
           to_step = step,
           failed_fit = NULL,
-          failed_fit_measures = NULL
+          failed_fit_measures = NULL,
+          details = list(
+            policy = partial_failure_rule_policy,
+            rules = failure_rule_set
+          )
         )
         step_failures[[step]] <- fail_info
 
@@ -665,10 +761,6 @@ mgcfa_auto <- function(
           reason = sprintf("Step `%s` estimation failed (%s).", step, fit_or_error$message)
         )
 
-        search_criterion <- partial_search_criterion %||% "chisq_pvalue"
-        search_threshold <- partial_search_threshold %||% .mgcfa_default_partial_threshold(search_criterion)
-        search_measure <- partial_search_measure %||% partial_failure_measure
-        search_direction <- partial_search_direction %||% partial_failure_direction
         step_candidate_source <- .mgcfa_resolve_candidate_source(
           step = step,
           source = partial_search_candidate_source,
@@ -692,11 +784,9 @@ mgcfa_auto <- function(
             orthogonal = isTRUE(orthogonal),
             previous_fit = prev_fit,
             base_partial = step_partial,
-            criterion = search_criterion,
-            threshold = search_threshold,
-            eval_measure = search_measure,
-            eval_direction = search_direction,
-            ic_bic_weight = partial_ic_bic_weight,
+            rule_set = default_search_rules,
+            rule_policy = partial_search_rule_policy,
+            rule_min = partial_search_rule_min,
             max_free = partial_search_max_free,
             top_n = partial_search_top_n,
             stop_on_accept = step_stop_on_accept,
@@ -705,6 +795,7 @@ mgcfa_auto <- function(
             candidate_source = step_candidate_source,
             max_models = partial_search_max_models,
             allow_full_release = isTRUE(partial_search_allow_full_release),
+            full_release_action = partial_search_full_release_action,
             fit_measures = fit_measures
           )
           search_out$triggered <- TRUE
@@ -727,14 +818,10 @@ mgcfa_auto <- function(
           search_out <- list(
             triggered = TRUE,
             decision = if (partial_auto_search == "prompt" && interactive()) "declined" else "not_requested",
-            criterion = partial_search_criterion %||% "chisq_pvalue",
-            threshold = partial_search_threshold %||%
-              .mgcfa_default_partial_threshold(
-                partial_search_criterion %||% "chisq_pvalue"
-              ),
-            criterion_measure = if (identical(search_criterion, "measure_change")) search_measure else NULL,
-            criterion_direction = if (identical(search_criterion, "measure_change")) search_direction else NULL,
-            criterion_ic_bic_weight = if (identical(search_criterion, "aic_bic_weight")) partial_ic_bic_weight else NULL,
+            criterion = search_criterion_label,
+            threshold = search_threshold_display,
+            rule_policy = partial_search_rule_policy,
+            rules = default_search_rules,
             candidates = data.frame(),
             top_models = data.frame(),
             selected_partial = character(),
@@ -759,21 +846,19 @@ mgcfa_auto <- function(
 
     fits[[step]] <- fit_or_error
 
-    if (!is.null(prev_fit) && !is.null(geq) && partial_failure_criterion != "none") {
-      step_eval <- .mgcfa_step_eval(
+    if (!is.null(prev_fit) && !is.null(geq) && isTRUE(failure_eval_enabled)) {
+      step_eval <- .mgcfa_step_eval_rules(
         previous_fit = prev_fit,
         candidate_fit = fit_or_error,
-        criterion = partial_failure_criterion,
-        threshold = partial_failure_threshold,
-        measure = partial_failure_measure,
-        direction = partial_failure_direction,
-        ic_bic_weight = partial_ic_bic_weight
+        rules = failure_rule_set,
+        policy = partial_failure_rule_policy,
+        min_pass = partial_failure_rule_min
       )
 
       fail_info <- list(
         failed = !isTRUE(step_eval$pass),
-        reason = if (isTRUE(step_eval$pass)) NULL else sprintf("Step `%s` failed `%s` criterion.", step, partial_failure_criterion),
-        criterion = partial_failure_criterion,
+        reason = if (isTRUE(step_eval$pass)) NULL else sprintf("Step `%s` failed `%s` criterion.", step, failure_criterion_label),
+        criterion = failure_criterion_label,
         threshold = step_eval$threshold,
         value = step_eval$value,
         gap = step_eval$gap,
@@ -792,13 +877,9 @@ mgcfa_auto <- function(
         step_acceptable <- FALSE
         do_search <- .mgcfa_should_run_partial_search(
           mode = partial_auto_search,
-          reason = sprintf("Step `%s` failed `%s` criterion.", step, partial_failure_criterion)
+          reason = sprintf("Step `%s` failed `%s` criterion.", step, failure_criterion_label)
         )
 
-        search_criterion <- partial_search_criterion %||% "chisq_pvalue"
-        search_threshold <- partial_search_threshold %||% .mgcfa_default_partial_threshold(search_criterion)
-        search_measure <- partial_search_measure %||% partial_failure_measure
-        search_direction <- partial_search_direction %||% partial_failure_direction
         step_candidate_source <- .mgcfa_resolve_candidate_source(
           step = step,
           source = partial_search_candidate_source,
@@ -822,11 +903,9 @@ mgcfa_auto <- function(
             orthogonal = isTRUE(orthogonal),
             previous_fit = prev_fit,
             base_partial = step_partial,
-            criterion = search_criterion,
-            threshold = search_threshold,
-            eval_measure = search_measure,
-            eval_direction = search_direction,
-            ic_bic_weight = partial_ic_bic_weight,
+            rule_set = default_search_rules,
+            rule_policy = partial_search_rule_policy,
+            rule_min = partial_search_rule_min,
             max_free = partial_search_max_free,
             top_n = partial_search_top_n,
             stop_on_accept = step_stop_on_accept,
@@ -835,6 +914,7 @@ mgcfa_auto <- function(
             candidate_source = step_candidate_source,
             max_models = partial_search_max_models,
             allow_full_release = isTRUE(partial_search_allow_full_release),
+            full_release_action = partial_search_full_release_action,
             fit_measures = fit_measures
           )
           search_out$triggered <- TRUE
@@ -860,11 +940,10 @@ mgcfa_auto <- function(
           search_out <- list(
             triggered = TRUE,
             decision = if (partial_auto_search == "prompt" && interactive()) "declined" else "not_requested",
-            criterion = partial_search_criterion %||% "chisq_pvalue",
-            threshold = partial_search_threshold %||% .mgcfa_default_partial_threshold(partial_search_criterion %||% "chisq_pvalue"),
-            criterion_measure = if (identical(search_criterion, "measure_change")) search_measure else NULL,
-            criterion_direction = if (identical(search_criterion, "measure_change")) search_direction else NULL,
-            criterion_ic_bic_weight = if (identical(search_criterion, "aic_bic_weight")) partial_ic_bic_weight else NULL,
+            criterion = search_criterion_label,
+            threshold = search_threshold_display,
+            rule_policy = partial_search_rule_policy,
+            rules = default_search_rules,
             candidates = data.frame(),
             top_models = data.frame(),
             selected_partial = character(),
@@ -890,7 +969,7 @@ mgcfa_auto <- function(
           stopped_reason <- sprintf(
             "Stopped after `%s` because invariance remained unacceptable under `%s` (threshold = %s).",
             step,
-            partial_failure_criterion,
+            failure_criterion_label,
             format(step_eval$threshold, trim = TRUE)
           )
           break
@@ -1623,8 +1702,158 @@ mgcfa_plot_fit <- function(
 }
 
 .mgcfa_criterion_higher_is_better <- function(criterion) {
-  criterion <- match.arg(criterion, choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change"))
+  criterion <- match.arg(criterion, choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change", "multi_rule"))
+  if (identical(criterion, "multi_rule")) {
+    return(TRUE)
+  }
   criterion %in% c("chisq_pvalue", "aic_bic_weight", "measure_change")
+}
+
+.mgcfa_required_passes <- function(n_rules, policy = c("all", "majority", "any", "at_least"), min_pass = NULL) {
+  policy <- match.arg(policy)
+  n_rules <- as.integer(n_rules)
+  if (is.na(n_rules) || n_rules < 1L) {
+    stop("`n_rules` must be a positive integer.", call. = FALSE)
+  }
+  if (identical(policy, "all")) {
+    return(n_rules)
+  }
+  if (identical(policy, "any")) {
+    return(1L)
+  }
+  if (identical(policy, "majority")) {
+    return(floor(n_rules / 2) + 1L)
+  }
+  min_pass <- as.integer(min_pass %||% ceiling(n_rules / 2))
+  if (is.na(min_pass) || min_pass < 1L) {
+    min_pass <- 1L
+  }
+  min(min_pass, n_rules)
+}
+
+.mgcfa_resolve_rule_set <- function(
+  rules = NULL,
+  criterion = "chisq_pvalue",
+  threshold = NULL,
+  measure = "aic",
+  direction = "decrease",
+  ic_bic_weight = 0.5
+) {
+  normalize_one <- function(r) {
+    if (!is.list(r)) {
+      stop("Each rule in `rules` must be a named list.", call. = FALSE)
+    }
+    crit <- as.character(r$criterion %||% criterion)[[1L]]
+    if (!nzchar(crit)) {
+      stop("Each rule must define a non-empty `criterion`.", call. = FALSE)
+    }
+    crit <- match.arg(crit, choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change"))
+    thr <- r$threshold %||% if (!is.null(threshold)) threshold else .mgcfa_default_partial_threshold(crit)
+    if (!is.numeric(thr) || length(thr) != 1L || !is.finite(thr)) {
+      stop("Each rule `threshold` must be a finite numeric scalar.", call. = FALSE)
+    }
+
+    out <- list(
+      criterion = crit,
+      threshold = as.numeric(thr),
+      measure = NULL,
+      direction = NULL,
+      ic_bic_weight = NULL,
+      label = as.character(r$label %||% crit)[[1L]]
+    )
+
+    if (identical(crit, "measure_change")) {
+      m <- as.character(r$measure %||% measure)[[1L]]
+      if (!nzchar(m)) {
+        stop("`measure_change` rules require a non-empty `measure`.", call. = FALSE)
+      }
+      dir <- match.arg(as.character(r$direction %||% direction)[[1L]], choices = c("decrease", "increase"))
+      out$measure <- m
+      out$direction <- dir
+    }
+    if (identical(crit, "aic_bic_weight")) {
+      w <- as.numeric(r$ic_bic_weight %||% ic_bic_weight)
+      if (length(w) != 1L || !is.finite(w) || w < 0 || w > 1) {
+        stop("`ic_bic_weight` in each rule must be in [0, 1].", call. = FALSE)
+      }
+      out$ic_bic_weight <- w
+    }
+    out
+  }
+
+  if (is.null(rules)) {
+    return(list(normalize_one(list(
+      criterion = criterion,
+      threshold = threshold,
+      measure = measure,
+      direction = direction,
+      ic_bic_weight = ic_bic_weight
+    ))))
+  }
+  if (!is.list(rules) || length(rules) < 1L) {
+    stop("`rules` must be NULL or a non-empty list of rule definitions.", call. = FALSE)
+  }
+  out <- lapply(rules, normalize_one)
+  if (length(out) < 1L) {
+    stop("At least one decision rule is required.", call. = FALSE)
+  }
+  out
+}
+
+.mgcfa_step_eval_rules <- function(previous_fit, candidate_fit, rules, policy = c("all", "majority", "any", "at_least"), min_pass = NULL) {
+  policy <- match.arg(policy)
+  if (!is.list(rules) || length(rules) < 1L) {
+    stop("`rules` must be a non-empty list.", call. = FALSE)
+  }
+
+  evals <- lapply(rules, function(r) {
+    .mgcfa_step_eval(
+      previous_fit = previous_fit,
+      candidate_fit = candidate_fit,
+      criterion = r$criterion,
+      threshold = r$threshold,
+      measure = r$measure %||% "aic",
+      direction = r$direction %||% "decrease",
+      ic_bic_weight = r$ic_bic_weight %||% 0.5
+    )
+  })
+
+  n_rules <- length(evals)
+  pass_vec <- vapply(evals, function(x) isTRUE(x$pass), logical(1L))
+  n_pass <- sum(pass_vec)
+  required_pass <- .mgcfa_required_passes(n_rules = n_rules, policy = policy, min_pass = min_pass)
+  pass_all <- n_pass >= required_pass
+  single_rule <- (n_rules == 1L)
+
+  details_tbl <- data.frame(
+    rule = seq_len(n_rules),
+    criterion = vapply(rules, function(r) as.character(r$criterion), character(1L)),
+    pass = pass_vec,
+    value = vapply(evals, function(x) as.numeric(x$value), numeric(1L)),
+    threshold = vapply(evals, function(x) as.numeric(x$threshold), numeric(1L)),
+    gap = vapply(evals, function(x) as.numeric(x$gap), numeric(1L)),
+    measure = vapply(rules, function(r) as.character(r$measure %||% ""), character(1L)),
+    direction = vapply(rules, function(r) as.character(r$direction %||% ""), character(1L)),
+    stringsAsFactors = FALSE
+  )
+
+  list(
+    pass = pass_all,
+    value = if (single_rule) as.numeric(evals[[1L]]$value) else as.numeric(n_pass / n_rules),
+    threshold = if (single_rule) as.numeric(evals[[1L]]$threshold) else as.numeric(required_pass / n_rules),
+    gap = if (single_rule) as.numeric(evals[[1L]]$gap) else as.numeric(n_pass - required_pass),
+    n_pass = as.integer(n_pass),
+    n_rules = as.integer(n_rules),
+    required_pass = as.integer(required_pass),
+    details = list(
+      policy = policy,
+      required_pass = required_pass,
+      n_pass = n_pass,
+      n_rules = n_rules,
+      rule_results = details_tbl,
+      per_rule = evals
+    )
+  )
 }
 
 .mgcfa_pair_ic_weight <- function(previous_ic, candidate_ic) {
@@ -1712,6 +1941,8 @@ mgcfa_plot_fit <- function(
     d_df <- df_candidate - df_metric
     p_value <- if (is.finite(d_chisq) && is.finite(d_df) && d_df > 0) {
       stats::pchisq(d_chisq, df = d_df, lower.tail = FALSE)
+    } else if (is.finite(d_df) && d_df <= 0) {
+      1
     } else {
       NA_real_
     }
@@ -1813,11 +2044,9 @@ mgcfa_plot_fit <- function(
   orthogonal,
   previous_fit,
   base_partial,
-  criterion,
-  threshold,
-  eval_measure,
-  eval_direction,
-  ic_bic_weight,
+  rule_set,
+  rule_policy,
+  rule_min,
   max_free,
   top_n,
   stop_on_accept,
@@ -1826,20 +2055,25 @@ mgcfa_plot_fit <- function(
   candidate_source,
   max_models,
   allow_full_release,
+  full_release_action,
   fit_measures
 ) {
-  criterion <- match.arg(criterion, choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change"))
-  eval_direction <- match.arg(eval_direction, choices = c("decrease", "increase"))
+  rule_policy <- match.arg(rule_policy, choices = c("all", "majority", "any", "at_least"))
   rank <- match.arg(rank, choices = c("closest", "best"))
   candidate_source <- match.arg(candidate_source, choices = c("score", "all"))
+  full_release_action <- match.arg(full_release_action, choices = c("exploratory", "eligible"))
   max_models <- as.integer(max_models)
   if (is.na(max_models) || max_models < 1L) {
     max_models <- 5000L
   }
-  allow_full_release <- isTRUE(allow_full_release)
-  if (is.null(threshold)) {
-    threshold <- .mgcfa_default_partial_threshold(criterion)
+  rule_set <- .mgcfa_resolve_rule_set(rules = rule_set)
+  criterion <- if (length(rule_set) > 1L) "multi_rule" else rule_set[[1L]]$criterion
+  threshold <- if (length(rule_set) > 1L) {
+    as.numeric(.mgcfa_required_passes(length(rule_set), policy = rule_policy, min_pass = rule_min) / length(rule_set))
+  } else {
+    as.numeric(rule_set[[1L]]$threshold)
   }
+  allow_full_release <- isTRUE(allow_full_release)
 
   base_partial <- .mgcfa_normalize_terms(base_partial %||% character())
   added_constraints <- unique(as.character(added_constraints %||% character()))
@@ -1969,24 +2203,33 @@ mgcfa_plot_fit <- function(
       )
 
       is_ok <- !inherits(fit_or_error, "error")
-      step_eval <- list(pass = FALSE, value = NA_real_, gap = NA_real_)
+      step_eval <- list(
+        pass = FALSE,
+        value = NA_real_,
+        gap = NA_real_,
+        threshold = threshold,
+        n_pass = NA_integer_,
+        n_rules = length(rule_set),
+        required_pass = .mgcfa_required_passes(length(rule_set), policy = rule_policy, min_pass = rule_min),
+        details = NULL
+      )
       fit_stats <- stats::setNames(rep(NA_real_, 5L), c("chisq", "df", "cfi", "aic", "bic"))
 
       if (is_ok) {
-        step_eval <- .mgcfa_step_eval(
+        step_eval <- .mgcfa_step_eval_rules(
           previous_fit = previous_fit,
           candidate_fit = fit_or_error,
-          criterion = criterion,
-          threshold = threshold,
-          measure = eval_measure,
-          direction = eval_direction,
-          ic_bic_weight = ic_bic_weight
+          rules = rule_set,
+          policy = rule_policy,
+          min_pass = rule_min
         )
         fit_stats <- lavaan::fitMeasures(fit_or_error, c("chisq", "df", "cfi", "aic", "bic"))
       }
 
       stage_reached_i <- if (n_releasable <= 0L) TRUE else (length(added_terms) < n_releasable)
-      stage_acceptable_i <- is_ok && isTRUE(step_eval$pass) && isTRUE(stage_reached_i)
+      full_release_eligible <- identical(full_release_action, "eligible") && !isTRUE(stage_reached_i)
+      stage_acceptable_i <- is_ok && isTRUE(step_eval$pass) &&
+        (isTRUE(stage_reached_i) || isTRUE(full_release_eligible))
 
       candidate_rows[[length(candidate_rows) + 1L]] <- data.frame(
         iteration = iter_id,
@@ -1996,15 +2239,19 @@ mgcfa_plot_fit <- function(
         n_added = length(added_terms),
         n_partial_total = length(partial_now),
         criterion = criterion,
-        criterion_measure = if (identical(criterion, "measure_change")) eval_measure else "",
-        criterion_direction = if (identical(criterion, "measure_change")) eval_direction else "",
-        criterion_ic_bic_weight = if (identical(criterion, "aic_bic_weight")) ic_bic_weight else NA_real_,
+        criterion_measure = if (length(rule_set) == 1L && identical(rule_set[[1L]]$criterion, "measure_change")) rule_set[[1L]]$measure else "",
+        criterion_direction = if (length(rule_set) == 1L && identical(rule_set[[1L]]$criterion, "measure_change")) rule_set[[1L]]$direction else "",
+        criterion_ic_bic_weight = if (length(rule_set) == 1L && identical(rule_set[[1L]]$criterion, "aic_bic_weight")) rule_set[[1L]]$ic_bic_weight else NA_real_,
         criterion_value = as.numeric(step_eval$value),
-        threshold = threshold,
+        threshold = as.numeric(step_eval$threshold),
         criterion_gap = as.numeric(step_eval$gap),
         pass = isTRUE(step_eval$pass),
+        pass_count = as.integer(step_eval$n_pass),
+        rule_count = as.integer(step_eval$n_rules),
+        required_pass = as.integer(step_eval$required_pass),
         stage_reached = isTRUE(stage_reached_i),
         stage_not_reached = !isTRUE(stage_reached_i),
+        full_release_selected = !isTRUE(stage_reached_i),
         stage_acceptable = isTRUE(stage_acceptable_i),
         chisq = as.numeric(fit_stats[["chisq"]]),
         df = as.numeric(fit_stats[["df"]]),
@@ -2126,8 +2373,12 @@ mgcfa_plot_fit <- function(
   list(
     step = step,
     added_constraints = added_constraints,
+    rules = rule_set,
+    rule_policy = rule_policy,
+    rule_min = rule_min,
     candidate_source = candidate_source,
     allow_full_release = isTRUE(allow_full_release),
+    full_release_action = full_release_action,
     forced_single_release_test = isTRUE(force_single_release_test),
     total_releasable = as.integer(n_releasable),
     min_active_constraints = as.integer(min_remaining),
@@ -2136,9 +2387,9 @@ mgcfa_plot_fit <- function(
     truncated = isTRUE(truncated),
     evaluated_models = as.integer(nrow(candidates)),
     criterion = criterion,
-    criterion_measure = if (identical(criterion, "measure_change")) eval_measure else NULL,
-    criterion_direction = if (identical(criterion, "measure_change")) eval_direction else NULL,
-    criterion_ic_bic_weight = if (identical(criterion, "aic_bic_weight")) ic_bic_weight else NULL,
+    criterion_measure = if (length(rule_set) == 1L && identical(rule_set[[1L]]$criterion, "measure_change")) rule_set[[1L]]$measure else NULL,
+    criterion_direction = if (length(rule_set) == 1L && identical(rule_set[[1L]]$criterion, "measure_change")) rule_set[[1L]]$direction else NULL,
+    criterion_ic_bic_weight = if (length(rule_set) == 1L && identical(rule_set[[1L]]$criterion, "aic_bic_weight")) rule_set[[1L]]$ic_bic_weight else NULL,
     threshold = threshold,
     candidates = candidates,
     top_models = top_models,

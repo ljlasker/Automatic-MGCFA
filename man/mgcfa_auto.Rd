@@ -32,6 +32,9 @@ mgcfa_auto(
   partial_failure_threshold = NULL,
   partial_failure_measure = "aic",
   partial_failure_direction = c("decrease", "increase"),
+  partial_failure_rules = NULL,
+  partial_failure_rule_policy = c("all", "majority", "any", "at_least"),
+  partial_failure_rule_min = NULL,
   partial_auto_search = c("prompt", "never", "always"),
   partial_search_criterion = NULL,
   partial_search_threshold = NULL,
@@ -43,10 +46,14 @@ mgcfa_auto(
   partial_search_stop_on_accept = TRUE,
   partial_search_rank = c("closest", "best"),
   partial_search_use_best_if_no_pass = TRUE,
+  partial_search_rules = NULL,
+  partial_search_rule_policy = c("all", "majority", "any", "at_least"),
+  partial_search_rule_min = NULL,
   partial_search_candidate_source = c("auto", "score", "all"),
   partial_search_exhaustive_steps = c("lv.variances", "means"),
   partial_search_max_models = 5000L,
   partial_search_allow_full_release = FALSE,
+  partial_search_full_release_action = c("exploratory", "eligible"),
   means_constrain_lv_variances = TRUE,
   stop_at_first_unacceptable = TRUE
 )
@@ -124,6 +131,18 @@ constrained invariance step relative to the previous step in sequence. One of
 \item{partial_failure_direction}{Direction used when
 \code{partial_failure_criterion = "measure_change"}.}
 
+\item{partial_failure_rules}{Optional list of rule objects for multi-metric
+failure decisions. Each rule is a named list with at least
+\code{criterion}, and optionally \code{threshold}, \code{measure},
+\code{direction}, and \code{ic_bic_weight}.}
+
+\item{partial_failure_rule_policy}{Aggregation policy for multi-rule failure
+decisions: \code{"all"}, \code{"majority"}, \code{"any"}, or
+\code{"at_least"}.}
+
+\item{partial_failure_rule_min}{Minimum number of passing rules required when
+\code{partial_failure_rule_policy = "at_least"}.}
+
 \item{partial_auto_search}{Behavior when a constrained step fails:
 \code{"prompt"}, \code{"never"}, or \code{"always"}.}
 
@@ -161,6 +180,17 @@ acceptable candidate.}
 \item{partial_search_use_best_if_no_pass}{If \code{TRUE} and no candidate passes
 the threshold, continue with the best-ranked candidate.}
 
+\item{partial_search_rules}{Optional list of rule objects for multi-metric
+partial-search acceptance decisions. Rule format matches
+\code{partial_failure_rules}.}
+
+\item{partial_search_rule_policy}{Aggregation policy for multi-rule search
+decisions: \code{"all"}, \code{"majority"}, \code{"any"}, or
+\code{"at_least"}.}
+
+\item{partial_search_rule_min}{Minimum number of passing rules required when
+\code{partial_search_rule_policy = "at_least"}.}
+
 \item{partial_search_candidate_source}{Candidate release-term source.
 \code{"score"} uses only score-test releasable constraints,
 \code{"all"} uses all releasable equality terms detected for the step, and
@@ -177,11 +207,16 @@ during automatic partial search for a step.}
 
 \item{partial_search_allow_full_release}{If \code{TRUE}, allow candidate models
 that free all step-specific equality constraints. These candidates are flagged
-as \code{stage_reached = FALSE} and are not counted as acceptable
-invariance-stage recoveries. For \code{"lv.variances"} and \code{"means"}
+as \code{stage_reached = FALSE}. Whether they are treated as acceptable
+fallbacks is controlled by \code{partial_search_full_release_action}. For \code{"lv.variances"} and \code{"means"}
 with exactly one releasable term, the fully freed candidate is evaluated
 automatically as an exploratory comparison even when this argument is
 \code{FALSE}.}
+
+\item{partial_search_full_release_action}{How fully freed candidates are treated
+when included. \code{"exploratory"} keeps them non-acceptable
+(stage-not-reached), while \code{"eligible"} allows them to be selected as
+acceptable fallbacks when decision rules pass.}
 
 \item{means_constrain_lv_variances}{If \code{TRUE} (default), the
 \code{"means"} stage also constrains latent variances. If \code{FALSE},
@@ -238,6 +273,9 @@ with fewer freed constraints. By default it retains at least one active
 equality constraint for a level; setting
 \code{partial_search_allow_full_release = TRUE} includes fully free
 exploratory candidates (flagged as stage not reached).
+Failure and search decisions can be aggregated across any number of rules
+using \code{partial_failure_rules}/\code{partial_search_rules} and their
+policy arguments.
 By default, latent-variance and latent-mean stages use exhaustive candidate
 enumeration in automatic mode.
 }
