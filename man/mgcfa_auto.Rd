@@ -43,6 +43,9 @@ mgcfa_auto(
   partial_search_stop_on_accept = TRUE,
   partial_search_rank = c("closest", "best"),
   partial_search_use_best_if_no_pass = TRUE,
+  partial_search_candidate_source = c("auto", "score", "all"),
+  partial_search_exhaustive_steps = c("lv.variances", "means"),
+  partial_search_max_models = 5000L,
   stop_at_first_unacceptable = TRUE
 )
 }
@@ -157,6 +160,20 @@ acceptable candidate.}
 \item{partial_search_use_best_if_no_pass}{If \code{TRUE} and no candidate passes
 the threshold, continue with the best-ranked candidate.}
 
+\item{partial_search_candidate_source}{Candidate release-term source.
+\code{"score"} uses only score-test releasable constraints,
+\code{"all"} uses all releasable equality terms detected for the step, and
+\code{"auto"} uses \code{"all"} for
+\code{partial_search_exhaustive_steps} and \code{"score"} otherwise.}
+
+\item{partial_search_exhaustive_steps}{Steps that should default to exhaustive
+release-term enumeration when
+\code{partial_search_candidate_source = "auto"}. Defaults to
+\code{c("lv.variances", "means")}.}
+
+\item{partial_search_max_models}{Maximum number of candidate models evaluated
+during automatic partial search for a step.}
+
 \item{stop_at_first_unacceptable}{If \code{TRUE}, stop fitting higher
 invariance stages after the first constrained stage that remains
 unacceptable relative to the previous fitted stage.}
@@ -205,4 +222,6 @@ If a constrained invariance step fails, \code{mgcfa_auto()} can prompt for or
 automatically run a partial-model search for that step. The search frees
 eligible equality constraints iteratively, prioritizes acceptable candidates
 with fewer freed constraints, and will not free all constraints for a level.
+By default, latent-variance and latent-mean stages use exhaustive candidate
+enumeration in automatic mode.
 }

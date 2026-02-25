@@ -20,6 +20,7 @@ remotes::install_github("ljlasker/Automatic-MGCFA")
 - Run staged invariance testing across `configural`, `metric`, `scalar`, `strict`, `lv.variances`, and `means`.
 - Detect failed constrained stages using chi-square change p-value or delta CFI.
 - Run automatic partial-invariance search at failed stages (prompt, never, or always).
+- Automatically evaluate exhaustive latent-stage subsets for `lv.variances` and `means` (for example, general-only, general+subset, up to nearly unconstrained).
 - By default, stop progression after the first constrained stage that remains unacceptable.
 - Preserve failed non-partial outputs for failed constrained stages in `out$failed_step_outputs`.
 - Return tidy fit tables and plotting-ready outputs.
@@ -76,6 +77,14 @@ out_failure_rule <- mgcfa_auto(
   partial_failure_measure = "bic",
   partial_failure_direction = "decrease",
   partial_failure_threshold = 0
+)
+
+# Force exhaustive release-term enumeration at all stages (not only latent stages)
+out_all_terms <- mgcfa_auto(
+  ...,
+  partial_search_candidate_source = "all",
+  partial_search_stop_on_accept = FALSE,
+  partial_search_max_models = 20000L
 )
 ```
 

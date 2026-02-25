@@ -305,6 +305,16 @@ mgcfa_make_summary <- function(
 #'   \code{"closest"} or \code{"best"}.
 #' @param partial_search_use_best_if_no_pass Logical; if no candidate meets the
 #'   threshold, continue invariance testing using the best ranked candidate.
+#' @param partial_search_candidate_source Candidate release-term source.
+#'   \code{"score"} uses only score-test releasable constraints,
+#'   \code{"all"} uses all releasable equality terms detected for the step,
+#'   and \code{"auto"} uses \code{"all"} for
+#'   \code{partial_search_exhaustive_steps} and \code{"score"} otherwise.
+#' @param partial_search_exhaustive_steps Steps that should default to exhaustive
+#'   release-term enumeration when \code{partial_search_candidate_source = "auto"}.
+#'   Defaults to \code{c("lv.variances", "means")}.
+#' @param partial_search_max_models Maximum number of candidate models evaluated
+#'   during automatic partial search for a step.
 #' @param stop_at_first_unacceptable Logical; if \code{TRUE}, stop fitting
 #'   higher invariance stages after the first constrained stage that remains
 #'   unacceptable relative to the previous fitted stage.
@@ -349,6 +359,9 @@ mgcfa_auto <- function(
   partial_search_stop_on_accept = TRUE,
   partial_search_rank = c("closest", "best"),
   partial_search_use_best_if_no_pass = TRUE,
+  partial_search_candidate_source = c("auto", "score", "all"),
+  partial_search_exhaustive_steps = c("lv.variances", "means"),
+  partial_search_max_models = 5000L,
   stop_at_first_unacceptable = TRUE
 ) {
   if (!requireNamespace("lavaan", quietly = TRUE)) {
@@ -365,6 +378,7 @@ mgcfa_auto <- function(
   partial_failure_direction <- match.arg(partial_failure_direction)
   partial_auto_search <- match.arg(partial_auto_search, choices = c("prompt", "never", "always"))
   partial_search_rank <- match.arg(partial_search_rank)
+  partial_search_candidate_source <- match.arg(partial_search_candidate_source, choices = c("auto", "score", "all"))
 
   if (!is.null(partial_search_criterion)) {
     partial_search_criterion <- match.arg(
@@ -424,6 +438,15 @@ mgcfa_auto <- function(
       is.na(partial_search_use_best_if_no_pass)) {
     stop("`partial_search_use_best_if_no_pass` must be TRUE or FALSE.", call. = FALSE)
   }
+  partial_search_max_models <- as.integer(partial_search_max_models)
+  if (is.na(partial_search_max_models) || partial_search_max_models < 1L) {
+    stop("`partial_search_max_models` must be a positive integer.", call. = FALSE)
+  }
+  partial_search_exhaustive_steps <- unique(match.arg(
+    partial_search_exhaustive_steps,
+    choices = available_steps,
+    several.ok = TRUE
+  ))
 
   if (!is.logical(stop_at_first_unacceptable) || length(stop_at_first_unacceptable) != 1L || is.na(stop_at_first_unacceptable)) {
     stop("`stop_at_first_unacceptable` must be TRUE or FALSE.", call. = FALSE)
@@ -614,6 +637,17 @@ mgcfa_auto <- function(
         search_threshold <- partial_search_threshold %||% .mgcfa_default_partial_threshold(search_criterion)
         search_measure <- partial_search_measure %||% partial_failure_measure
         search_direction <- partial_search_direction %||% partial_failure_direction
+        step_candidate_source <- .mgcfa_resolve_candidate_source(
+          step = step,
+          source = partial_search_candidate_source,
+          exhaustive_steps = partial_search_exhaustive_steps
+        )
+        step_stop_on_accept <- isTRUE(partial_search_stop_on_accept)
+        if (identical(partial_search_candidate_source, "auto") &&
+            (step %in% partial_search_exhaustive_steps) &&
+            identical(step_candidate_source, "all")) {
+          step_stop_on_accept <- FALSE
+        }
         if (do_search) {
           search_out <- .mgcfa_search_partial_step(
             step = step,
@@ -633,9 +667,11 @@ mgcfa_auto <- function(
             ic_bic_weight = partial_ic_bic_weight,
             max_free = partial_search_max_free,
             top_n = partial_search_top_n,
-            stop_on_accept = isTRUE(partial_search_stop_on_accept),
+            stop_on_accept = step_stop_on_accept,
             rank = partial_search_rank,
             use_best_if_no_pass = isTRUE(partial_search_use_best_if_no_pass),
+            candidate_source = step_candidate_source,
+            max_models = partial_search_max_models,
             fit_measures = fit_measures
           )
           search_out$triggered <- TRUE
@@ -729,6 +765,17 @@ mgcfa_auto <- function(
         search_threshold <- partial_search_threshold %||% .mgcfa_default_partial_threshold(search_criterion)
         search_measure <- partial_search_measure %||% partial_failure_measure
         search_direction <- partial_search_direction %||% partial_failure_direction
+        step_candidate_source <- .mgcfa_resolve_candidate_source(
+          step = step,
+          source = partial_search_candidate_source,
+          exhaustive_steps = partial_search_exhaustive_steps
+        )
+        step_stop_on_accept <- isTRUE(partial_search_stop_on_accept)
+        if (identical(partial_search_candidate_source, "auto") &&
+            (step %in% partial_search_exhaustive_steps) &&
+            identical(step_candidate_source, "all")) {
+          step_stop_on_accept <- FALSE
+        }
         if (do_search) {
           search_out <- .mgcfa_search_partial_step(
             step = step,
@@ -748,9 +795,11 @@ mgcfa_auto <- function(
             ic_bic_weight = partial_ic_bic_weight,
             max_free = partial_search_max_free,
             top_n = partial_search_top_n,
-            stop_on_accept = isTRUE(partial_search_stop_on_accept),
+            stop_on_accept = step_stop_on_accept,
             rank = partial_search_rank,
             use_best_if_no_pass = isTRUE(partial_search_use_best_if_no_pass),
+            candidate_source = step_candidate_source,
+            max_models = partial_search_max_models,
             fit_measures = fit_measures
           )
           search_out$triggered <- TRUE
@@ -1579,6 +1628,18 @@ mgcfa_plot_fit <- function(
   tolower(trimws(ans)) %in% c("y", "yes")
 }
 
+.mgcfa_resolve_candidate_source <- function(step, source = c("auto", "score", "all"), exhaustive_steps = c("lv.variances", "means")) {
+  source <- match.arg(source)
+  exhaustive_steps <- unique(as.character(exhaustive_steps %||% character()))
+  if (!identical(source, "auto")) {
+    return(source)
+  }
+  if (step %in% exhaustive_steps) {
+    return("all")
+  }
+  "score"
+}
+
 .mgcfa_step_eval <- function(
   previous_fit,
   candidate_fit,
@@ -1714,11 +1775,18 @@ mgcfa_plot_fit <- function(
   stop_on_accept,
   rank,
   use_best_if_no_pass,
+  candidate_source,
+  max_models,
   fit_measures
 ) {
   criterion <- match.arg(criterion, choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change"))
   eval_direction <- match.arg(eval_direction, choices = c("decrease", "increase"))
   rank <- match.arg(rank, choices = c("closest", "best"))
+  candidate_source <- match.arg(candidate_source, choices = c("score", "all"))
+  max_models <- as.integer(max_models)
+  if (is.na(max_models) || max_models < 1L) {
+    max_models <- 5000L
+  }
   if (is.null(threshold)) {
     threshold <- .mgcfa_default_partial_threshold(criterion)
   }
@@ -1726,7 +1794,6 @@ mgcfa_plot_fit <- function(
   base_partial <- .mgcfa_normalize_terms(base_partial %||% character())
   added_constraints <- unique(as.character(added_constraints %||% character()))
   min_remaining <- 1L
-  max_models <- 5000L
   truncated <- FALSE
 
   args0 <- c(
@@ -1751,18 +1818,26 @@ mgcfa_plot_fit <- function(
     error = function(e) NULL
   )
 
-  start_candidates <- data.frame()
+  score_candidates <- data.frame()
+  all_candidates <- data.frame()
   if (!is.null(fit0)) {
-    start_candidates <- .mgcfa_score_release_candidates(
+    score_candidates <- .mgcfa_score_release_candidates(
+      fit = fit0,
+      target_constraints = added_constraints,
+      already_freed = base_partial
+    )
+    all_candidates <- .mgcfa_all_release_candidates(
       fit = fit0,
       target_constraints = added_constraints,
       already_freed = base_partial
     )
   }
+
+  start_candidates <- if (identical(candidate_source, "all")) all_candidates else score_candidates
   releasable_terms <- unique(as.character(start_candidates$term))
   n_releasable <- length(releasable_terms)
-  score_lookup <- if (nrow(start_candidates) > 0L) {
-    tapply(start_candidates$x2, start_candidates$term, max, na.rm = TRUE)
+  score_lookup <- if (nrow(score_candidates) > 0L) {
+    tapply(score_candidates$x2, score_candidates$term, max, na.rm = TRUE)
   } else {
     numeric()
   }
@@ -1985,8 +2060,12 @@ mgcfa_plot_fit <- function(
   list(
     step = step,
     added_constraints = added_constraints,
+    candidate_source = candidate_source,
     total_releasable = as.integer(n_releasable),
     max_free_allowed = as.integer(max_free),
+    max_models = max_models,
+    truncated = isTRUE(truncated),
+    evaluated_models = as.integer(nrow(candidates)),
     criterion = criterion,
     criterion_measure = if (identical(criterion, "measure_change")) eval_measure else NULL,
     criterion_direction = if (identical(criterion, "measure_change")) eval_direction else NULL,
@@ -2041,6 +2120,95 @@ mgcfa_plot_fit <- function(
     rhs <- "1"
   }
   .mgcfa_normalize_terms(paste(lhs, op, rhs))[[1L]]
+}
+
+.mgcfa_all_release_candidates <- function(fit, target_constraints, already_freed = character()) {
+  target_constraints <- unique(as.character(target_constraints %||% character()))
+  already_freed <- .mgcfa_normalize_terms(already_freed)
+  empty <- data.frame(term = character(), constraint = character(), x2 = numeric(), stringsAsFactors = FALSE)
+  if (length(target_constraints) == 0L) {
+    return(empty)
+  }
+
+  pt <- tryCatch(
+    lavaan::parTable(fit),
+    error = function(e) NULL
+  )
+  if (is.null(pt) || nrow(pt) == 0L) {
+    return(empty)
+  }
+
+  ov_names <- lavaan::lavNames(fit, type = "ov")
+  lv_names <- lavaan::lavNames(fit, type = "lv")
+  key <- paste(pt$lhs, pt$op, pt$rhs, pt$group, sep = "\r")
+  pt <- pt[!duplicated(key), , drop = FALSE]
+
+  rows <- vector("list", nrow(pt))
+  out_i <- 0L
+  for (i in seq_len(nrow(pt))) {
+    cls <- .mgcfa_constraint_class(
+      op = as.character(pt$op[[i]]),
+      lhs = as.character(pt$lhs[[i]]),
+      rhs = as.character(pt$rhs[[i]]),
+      ov_names = ov_names,
+      lv_names = lv_names
+    )
+    if (is.na(cls) || !(cls %in% target_constraints)) {
+      next
+    }
+    term <- .mgcfa_term_from_parts(
+      lhs = as.character(pt$lhs[[i]]),
+      op = as.character(pt$op[[i]]),
+      rhs = as.character(pt$rhs[[i]])
+    )
+    if (term %in% already_freed) {
+      next
+    }
+
+    out_i <- out_i + 1L
+    rows[[out_i]] <- data.frame(
+      term = term,
+      constraint = cls,
+      group = as.integer(pt$group[[i]]),
+      label = as.character(pt$label[[i]]),
+      plabel = as.character(pt$plabel[[i]]),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (out_i == 0L) {
+    return(empty)
+  }
+
+  out <- do.call(rbind, rows[seq_len(out_i)])
+  n_group_by_term <- tapply(out$group, out$term, function(g) length(unique(g)))
+  terms_multi_group <- names(n_group_by_term)[n_group_by_term >= 2L]
+  if (length(terms_multi_group) == 0L) {
+    return(empty)
+  }
+  out <- out[out$term %in% terms_multi_group, , drop = FALSE]
+  if (nrow(out) == 0L) {
+    return(empty)
+  }
+
+  # Keep terms that still look equality-constrained across groups.
+  eq_by_term <- tapply(seq_len(nrow(out)), out$term, function(ix) {
+    labs <- out$label[ix]
+    labs <- labs[nzchar(labs)]
+    plabs <- out$plabel[ix]
+    plabs <- plabs[nzchar(plabs)]
+    any(duplicated(labs)) || any(duplicated(plabs))
+  })
+  terms_eq <- names(eq_by_term)[eq_by_term]
+  if (length(terms_eq) == 0L) {
+    terms_eq <- terms_multi_group
+  }
+
+  out <- out[out$term %in% terms_eq, c("term", "constraint"), drop = FALSE]
+  out <- unique(out)
+  out$x2 <- 0
+  rownames(out) <- NULL
+  out
 }
 
 .mgcfa_score_release_candidates <- function(fit, target_constraints, already_freed = character()) {
