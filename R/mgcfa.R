@@ -328,7 +328,8 @@ mgcfa_make_summary <- function(
 #'   \code{partial_search_exhaustive_steps} and \code{"score"} otherwise.
 #' @param partial_search_exhaustive_steps Steps that should default to exhaustive
 #'   release-term enumeration when \code{partial_search_candidate_source = "auto"}.
-#'   Defaults to \code{c("lv.variances", "means")}.
+#'   Defaults to \code{c("lv.variances", "lv.covariances",
+#'   "residual.covariances", "regressions", "means")}.
 #' @param partial_search_max_models Maximum number of candidate models evaluated
 #'   during automatic partial search for a step.
 #' @param partial_search_allow_full_release Logical; if \code{TRUE}, allow
@@ -336,9 +337,11 @@ mgcfa_make_summary <- function(
 #'   candidates are flagged as \code{stage_reached = FALSE}. Whether they are
 #'   treated as acceptable fallbacks is controlled by
 #'   \code{partial_search_full_release_action}. For
-#'   \code{"lv.variances"} and \code{"means"} with exactly one releasable term,
-#'   the fully freed candidate is evaluated automatically as an exploratory
-#'   comparison even when this argument is \code{FALSE}.
+#'   \code{"lv.variances"}, \code{"lv.covariances"},
+#'   \code{"residual.covariances"}, \code{"regressions"}, and
+#'   \code{"means"} with exactly one releasable term, the fully freed
+#'   candidate is evaluated automatically as an exploratory comparison even
+#'   when this argument is \code{FALSE}.
 #' @param partial_search_full_release_action How fully freed candidates are
 #'   treated when included. \code{"exploratory"} keeps them non-acceptable
 #'   (stage-not-reached), while \code{"eligible"} allows them to be selected as
@@ -368,7 +371,7 @@ mgcfa_auto <- function(
   group_labels = NULL,
   matrices_are_cor = FALSE,
   sample_sd = NULL,
-  include_steps = c("configural", "metric", "scalar", "strict", "lv.variances", "means"),
+  include_steps = c("configural", "metric", "scalar", "strict", "lv.variances", "lv.covariances", "residual.covariances", "means"),
   partial = NULL,
   estimator = NULL,
   std.lv_configural = TRUE,
@@ -397,7 +400,7 @@ mgcfa_auto <- function(
   partial_search_rule_policy = c("all", "majority", "any", "at_least"),
   partial_search_rule_min = NULL,
   partial_search_candidate_source = c("auto", "score", "all"),
-  partial_search_exhaustive_steps = c("lv.variances", "means"),
+  partial_search_exhaustive_steps = c("lv.variances", "lv.covariances", "residual.covariances", "regressions", "means"),
   partial_search_max_models = 5000L,
   partial_search_allow_full_release = FALSE,
   partial_search_full_release_action = c("exploratory", "eligible"),
@@ -409,8 +412,9 @@ mgcfa_auto <- function(
   }
 
   model_type <- match.arg(model_type)
-  available_steps <- c("configural", "metric", "scalar", "strict", "lv.variances", "means")
+  available_steps <- c("configural", "metric", "scalar", "strict", "lv.variances", "lv.covariances", "residual.covariances", "regressions", "means")
   include_steps <- unique(match.arg(include_steps, choices = available_steps, several.ok = TRUE))
+  include_steps <- available_steps[available_steps %in% include_steps]
   partial_failure_criterion <- match.arg(
     partial_failure_criterion,
     choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change", "none")
@@ -585,7 +589,7 @@ mgcfa_auto <- function(
     )
 
     if (is.null(prepared$sample_mean)) {
-      no_mean_steps <- c("scalar", "strict", "lv.variances", "means")
+      no_mean_steps <- c("scalar", "strict", "lv.variances", "lv.covariances", "residual.covariances", "regressions", "means")
       dropped <- intersect(include_steps, no_mean_steps)
       if (length(dropped) > 0L) {
         warning(
@@ -611,20 +615,8 @@ mgcfa_auto <- function(
       fit_args_base$group.label <- prepared$group_labels
     }
   }
-
-  means_equal <- c("loadings", "intercepts", "residuals", "means")
-  if (isTRUE(means_constrain_lv_variances)) {
-    means_equal <- c("loadings", "intercepts", "residuals", "lv.variances", "means")
-  }
-
-  step_equal <- list(
-    configural = NULL,
-    metric = c("loadings"),
-    scalar = c("loadings", "intercepts"),
-    strict = c("loadings", "intercepts", "residuals"),
-    "lv.variances" = c("loadings", "intercepts", "residuals", "lv.variances"),
-    means = means_equal
-  )
+  post_strict_steps <- c("lv.variances", "lv.covariances", "residual.covariances", "regressions", "means")
+  step_geq_used <- list()
 
   failure_eval_enabled <- !is.null(partial_failure_rules) || partial_failure_criterion != "none"
   failure_rule_set <- .mgcfa_resolve_rule_set(
@@ -691,14 +683,73 @@ mgcfa_auto <- function(
     step <- include_steps[[i]]
     prev_step <- if (i > 1L) include_steps[[i - 1L]] else NULL
     eval_prev_step <- prev_step
-    if (identical(step, "means") &&
-        !isTRUE(means_constrain_lv_variances) &&
-        ("strict" %in% names(fits))) {
-      eval_prev_step <- "strict"
+    step_anchor <- "strict"
+    if (step %in% post_strict_steps) {
+      strict_ok <- .mgcfa_step_is_acceptable(
+        step = "strict",
+        fits = fits,
+        step_failures = step_failures,
+        recovered_steps = recovered_steps
+      )
+      scalar_ok <- .mgcfa_step_is_acceptable(
+        step = "scalar",
+        fits = fits,
+        step_failures = step_failures,
+        recovered_steps = recovered_steps
+      )
+      if (isTRUE(strict_ok)) {
+        eval_prev_step <- "strict"
+        step_anchor <- "strict"
+      } else if (isTRUE(scalar_ok)) {
+        eval_prev_step <- "scalar"
+        step_anchor <- "scalar"
+      } else {
+        fail_info <- list(
+          failed = TRUE,
+          reason = sprintf(
+            "Step `%s` requires an acceptable `%s` or `%s` baseline model.",
+            step, "strict", "scalar"
+          ),
+          criterion = NA_character_,
+          threshold = NA_real_,
+          value = NA_real_,
+          gap = NA_real_,
+          from_step = NA_character_,
+          to_step = step,
+          failed_fit = NULL,
+          failed_fit_measures = NULL,
+          details = list(
+            anchor_required = c("strict", "scalar")
+          )
+        )
+        step_failures[[step]] <- fail_info
+        if (is.null(partial_failure)) {
+          partial_failure <- fail_info
+        }
+        if (isTRUE(stop_at_first_unacceptable)) {
+          stopped_early <- TRUE
+          stopped_after_step <- step
+          stopped_reason <- fail_info$reason
+          break
+        }
+        next
+      }
     }
+
     prev_fit <- if (!is.null(eval_prev_step)) fits[[eval_prev_step]] else NULL
-    geq <- step_equal[[step]]
-    added_constraints <- .mgcfa_added_constraints(step_equal, step = step, prev_step = eval_prev_step)
+    prior_requested <- if (i > 1L) include_steps[seq_len(i - 1L)] else character()
+    include_regressions_for_means <- identical(step, "means") &&
+      ("regressions" %in% prior_requested) &&
+      ("regressions" %in% names(fits))
+    geq <- .mgcfa_step_group_equal(
+      step = step,
+      anchor = step_anchor,
+      means_constrain_lv_variances = isTRUE(means_constrain_lv_variances),
+      include_regressions_for_means = include_regressions_for_means
+    )
+    prev_geq <- if (!is.null(eval_prev_step)) step_geq_used[[eval_prev_step]] %||% character() else character()
+    added_constraints <- setdiff(geq %||% character(), prev_geq %||% character())
+    step_geq_used[[step]] <- geq %||% character()
 
     step_partial <- character()
     if (!is.null(partial) && !is.null(partial[[step]])) {
@@ -839,6 +890,36 @@ mgcfa_auto <- function(
         if (is.null(partial_search)) {
           partial_search <- partial_searches[[step]]
         }
+      } else {
+        fail_info <- list(
+          failed = TRUE,
+          reason = fit_or_error$message,
+          criterion = if (isTRUE(failure_eval_enabled)) failure_criterion_label else "none",
+          threshold = if (isTRUE(failure_eval_enabled)) failure_threshold_display else NA_real_,
+          value = NA_real_,
+          gap = NA_real_,
+          from_step = eval_prev_step %||% NA_character_,
+          to_step = step,
+          failed_fit = NULL,
+          failed_fit_measures = NULL,
+          details = NULL
+        )
+        step_failures[[step]] <- fail_info
+        if (is.null(partial_failure)) {
+          partial_failure <- fail_info
+        }
+      }
+      remaining_steps <- if (i < length(include_steps)) include_steps[(i + 1L):length(include_steps)] else character()
+      keep_testing_post_strict <- identical(step, "strict") &&
+        any(remaining_steps %in% post_strict_steps) &&
+        .mgcfa_step_is_acceptable(
+          step = "scalar",
+          fits = fits,
+          step_failures = step_failures,
+          recovered_steps = recovered_steps
+        )
+      if (isTRUE(keep_testing_post_strict)) {
+        next
       }
 
       stop(sprintf("MGCFA failed at step `%s`: %s", step, fit_or_error$message), call. = FALSE)
@@ -962,8 +1043,19 @@ mgcfa_auto <- function(
         keep_testing_means <- identical(step, "lv.variances") &&
           !isTRUE(means_constrain_lv_variances) &&
           ("means" %in% remaining_steps)
+        keep_testing_post_strict <- identical(step, "strict") &&
+          any(remaining_steps %in% post_strict_steps) &&
+          .mgcfa_step_is_acceptable(
+            step = "scalar",
+            fits = fits,
+            step_failures = step_failures,
+            recovered_steps = recovered_steps
+          )
 
-        if (isTRUE(stop_at_first_unacceptable) && !isTRUE(step_acceptable) && !isTRUE(keep_testing_means)) {
+        if (isTRUE(stop_at_first_unacceptable) &&
+            !isTRUE(step_acceptable) &&
+            !isTRUE(keep_testing_means) &&
+            !isTRUE(keep_testing_post_strict)) {
           stopped_early <- TRUE
           stopped_after_step <- step
           stopped_reason <- sprintf(
@@ -1389,7 +1481,12 @@ mgcfa_plot_fit <- function(
     df$series_plot[df$variant_plot == "selected"] <- "Selected (Variance)"
     df$series_plot[df$variant_plot == "selected_mean"] <- "Selected (Mean)"
 
-    bridge_rows <- df[df$variant == "selected" & as.character(df$step) == "lv.variances", , drop = FALSE]
+    bridge_from_step <- if (!is.na(means_idx) && means_idx > 1L) {
+      as.character(step_levels[[means_idx - 1L]])
+    } else {
+      "lv.variances"
+    }
+    bridge_rows <- df[df$variant == "selected" & as.character(df$step) == bridge_from_step, , drop = FALSE]
     if (nrow(bridge_rows) > 0L) {
       bridge_rows$variant_plot <- "selected_mean"
       bridge_rows$series_plot <- "Selected (Mean)"
@@ -1664,6 +1761,9 @@ mgcfa_plot_fit <- function(
   out[steps == "scalar"] <- "Scalar"
   out[steps == "strict"] <- "Strict"
   out[steps == "lv.variances"] <- latent_variance
+  out[steps == "lv.covariances"] <- paste0("Latent", line_sep, "Covariances")
+  out[steps == "residual.covariances"] <- paste0("Residual", line_sep, "Covariances")
+  out[steps == "regressions"] <- "Regressions"
   out[steps == "means"] <- latent_mean
   out
 }
@@ -1881,6 +1981,72 @@ mgcfa_plot_fit <- function(
   unique(x)
 }
 
+.mgcfa_step_is_acceptable <- function(step, fits, step_failures, recovered_steps = character()) {
+  step <- as.character(step)[[1L]]
+  if (!nzchar(step) || is.null(fits[[step]])) {
+    return(FALSE)
+  }
+  fail_rec <- step_failures[[step]] %||% NULL
+  if (is.null(fail_rec) || !isTRUE(fail_rec$failed)) {
+    return(TRUE)
+  }
+  step %in% as.character(recovered_steps %||% character())
+}
+
+.mgcfa_step_group_equal <- function(
+  step,
+  anchor = c("strict", "scalar"),
+  means_constrain_lv_variances = TRUE,
+  include_regressions_for_means = FALSE
+) {
+  step <- as.character(step)[[1L]]
+  anchor <- match.arg(anchor)
+
+  if (identical(step, "configural")) {
+    return(NULL)
+  }
+  if (identical(step, "metric")) {
+    return(c("loadings"))
+  }
+  if (identical(step, "scalar")) {
+    return(c("loadings", "intercepts"))
+  }
+  if (identical(step, "strict")) {
+    return(c("loadings", "intercepts", "residuals"))
+  }
+
+  base <- if (identical(anchor, "strict")) {
+    c("loadings", "intercepts", "residuals")
+  } else {
+    c("loadings", "intercepts")
+  }
+
+  if (identical(step, "lv.variances")) {
+    return(unique(c(base, "lv.variances")))
+  }
+  if (identical(step, "lv.covariances")) {
+    return(unique(c(base, "lv.variances", "lv.covariances")))
+  }
+  if (identical(step, "residual.covariances")) {
+    return(unique(c(base, "lv.variances", "lv.covariances", "residual.covariances")))
+  }
+  if (identical(step, "regressions")) {
+    return(unique(c(base, "lv.variances", "lv.covariances", "residual.covariances", "regressions")))
+  }
+  if (identical(step, "means")) {
+    eq <- unique(c(base, "lv.variances", "lv.covariances", "residual.covariances", "means"))
+    if (!isTRUE(means_constrain_lv_variances)) {
+      eq <- setdiff(eq, "lv.variances")
+    }
+    if (isTRUE(include_regressions_for_means)) {
+      eq <- unique(c(eq, "regressions"))
+    }
+    return(eq)
+  }
+
+  stop("Unsupported invariance step: `", step, "`.", call. = FALSE)
+}
+
 .mgcfa_added_constraints <- function(step_equal, step, prev_step = NULL) {
   cur <- step_equal[[step]] %||% character()
   prev <- if (is.null(prev_step)) character() else step_equal[[prev_step]] %||% character()
@@ -1905,7 +2071,11 @@ mgcfa_plot_fit <- function(
   tolower(trimws(ans)) %in% c("y", "yes")
 }
 
-.mgcfa_resolve_candidate_source <- function(step, source = c("auto", "score", "all"), exhaustive_steps = c("lv.variances", "means")) {
+.mgcfa_resolve_candidate_source <- function(
+  step,
+  source = c("auto", "score", "all"),
+  exhaustive_steps = c("lv.variances", "lv.covariances", "residual.covariances", "regressions", "means")
+) {
   source <- match.arg(source)
   exhaustive_steps <- unique(as.character(exhaustive_steps %||% character()))
   if (!identical(source, "auto")) {
@@ -2122,7 +2292,7 @@ mgcfa_plot_fit <- function(
   n_releasable <- length(releasable_terms)
   force_single_release_test <- !isTRUE(allow_full_release) &&
     n_releasable == 1L &&
-    (step %in% c("lv.variances", "means"))
+    (step %in% c("lv.variances", "lv.covariances", "residual.covariances", "regressions", "means"))
   min_remaining <- if (isTRUE(allow_full_release) || isTRUE(force_single_release_test)) 0L else 1L
   score_lookup <- if (nrow(score_candidates) > 0L) {
     tapply(score_candidates$x2, score_candidates$term, max, na.rm = TRUE)
@@ -2410,6 +2580,9 @@ mgcfa_plot_fit <- function(
   if (identical(op, "=~")) {
     return("loadings")
   }
+  if (identical(op, "~")) {
+    return("regressions")
+  }
   if (identical(op, "~1")) {
     if (lhs %in% ov_names) {
       return("intercepts")
@@ -2425,6 +2598,14 @@ mgcfa_plot_fit <- function(
     }
     if (lhs %in% lv_names) {
       return("lv.variances")
+    }
+  }
+  if (identical(op, "~~") && !identical(lhs, rhs)) {
+    if ((lhs %in% ov_names) && (rhs %in% ov_names)) {
+      return("residual.covariances")
+    }
+    if ((lhs %in% lv_names) && (rhs %in% lv_names)) {
+      return("lv.covariances")
     }
   }
   NA_character_

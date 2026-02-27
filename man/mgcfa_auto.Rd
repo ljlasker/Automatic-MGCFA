@@ -19,7 +19,7 @@ mgcfa_auto(
   matrices_are_cor = FALSE,
   sample_sd = NULL,
   include_steps = c("configural", "metric", "scalar", "strict",
-    "lv.variances", "means"),
+    "lv.variances", "lv.covariances", "residual.covariances", "means"),
   partial = NULL,
   estimator = NULL,
   std.lv_configural = TRUE,
@@ -50,7 +50,8 @@ mgcfa_auto(
   partial_search_rule_policy = c("all", "majority", "any", "at_least"),
   partial_search_rule_min = NULL,
   partial_search_candidate_source = c("auto", "score", "all"),
-  partial_search_exhaustive_steps = c("lv.variances", "means"),
+  partial_search_exhaustive_steps = c("lv.variances", "lv.covariances",
+    "residual.covariances", "regressions", "means"),
   partial_search_max_models = 5000L,
   partial_search_allow_full_release = FALSE,
   partial_search_full_release_action = c("exploratory", "eligible"),
@@ -97,7 +98,8 @@ matrices if \code{TRUE}.}
 
 \item{include_steps}{Invariance steps to run, chosen from
 \code{"configural"}, \code{"metric"}, \code{"scalar"}, \code{"strict"},
-\code{"lv.variances"}, and \code{"means"}.}
+\code{"lv.variances"}, \code{"lv.covariances"},
+\code{"residual.covariances"}, \code{"regressions"}, and \code{"means"}.}
 
 \item{partial}{Optional named list of \code{group.partial} vectors keyed by
 step name.}
@@ -200,7 +202,7 @@ decisions: \code{"all"}, \code{"majority"}, \code{"any"}, or
 \item{partial_search_exhaustive_steps}{Steps that should default to exhaustive
 release-term enumeration when
 \code{partial_search_candidate_source = "auto"}. Defaults to
-\code{c("lv.variances", "means")}.}
+\code{c("lv.variances", "lv.covariances", "residual.covariances", "regressions", "means")}.}
 
 \item{partial_search_max_models}{Maximum number of candidate models evaluated
 during automatic partial search for a step.}
@@ -208,8 +210,9 @@ during automatic partial search for a step.}
 \item{partial_search_allow_full_release}{If \code{TRUE}, allow candidate models
 that free all step-specific equality constraints. These candidates are flagged
 as \code{stage_reached = FALSE}. Whether they are treated as acceptable
-fallbacks is controlled by \code{partial_search_full_release_action}. For \code{"lv.variances"} and \code{"means"}
-with exactly one releasable term, the fully freed candidate is evaluated
+fallbacks is controlled by \code{partial_search_full_release_action}. For \code{"lv.variances"},
+\code{"lv.covariances"}, \code{"residual.covariances"}, \code{"regressions"},
+and \code{"means"} with exactly one releasable term, the fully freed candidate is evaluated
 automatically as an exploratory comparison even when this argument is
 \code{FALSE}.}
 
@@ -276,6 +279,10 @@ exploratory candidates (flagged as stage not reached).
 Failure and search decisions can be aggregated across any number of rules
 using \code{partial_failure_rules}/\code{partial_search_rules} and their
 policy arguments.
-By default, latent-variance and latent-mean stages use exhaustive candidate
-enumeration in automatic mode.
+For post-strict stages (\code{"lv.variances"}, \code{"lv.covariances"},
+\code{"residual.covariances"}, \code{"regressions"}, \code{"means"}),
+the function uses \code{"strict"} as the baseline model when acceptable,
+and otherwise falls back to \code{"scalar"}.
+By default, latent-variance/covariance, residual-covariance, regression, and
+latent-mean stages use exhaustive candidate enumeration in automatic mode.
 }

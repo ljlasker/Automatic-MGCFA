@@ -17,10 +17,11 @@ remotes::install_github("ljlasker/Automatic-MGCFA")
 - Fit invariance models from raw data (`data` + `group`).
 - Fit invariance models from summary inputs (`sample_cov`, `sample_mean`, `sample_nobs`).
 - Build models from custom lavaan syntax, a single-factor template, or thresholded EFA/PCA loadings.
-- Run staged invariance testing across `configural`, `metric`, `scalar`, `strict`, `lv.variances`, and `means`.
+- Run staged invariance testing across `configural`, `metric`, `scalar`, `strict`, `lv.variances`, `lv.covariances`, `residual.covariances`, and `means` by default (with optional `regressions` stage).
+- For post-strict stages (`lv.variances`, `lv.covariances`, `residual.covariances`, `regressions`, `means`), automatically use `strict` as the baseline when acceptable, otherwise fall back to `scalar`.
 - Detect failed constrained stages using chi-square change p-value or delta CFI.
 - Run automatic partial-invariance search at failed stages (prompt, never, or always).
-- Automatically evaluate exhaustive latent-stage subsets for `lv.variances` and `means` (for example, general-only, general+subset, up to nearly unconstrained).
+- Automatically evaluate exhaustive higher-stage subsets for `lv.variances`, `lv.covariances`, `residual.covariances`, `regressions`, and `means` (for example, general-only, general+subset, up to nearly unconstrained).
 - By default, stop progression after the first constrained stage that remains unacceptable.
 - Preserve failed non-partial outputs for failed constrained stages in `out$failed_step_outputs`.
 - Return tidy fit tables and plotting-ready outputs.
@@ -100,7 +101,8 @@ out_with_fully_free_fallback <- mgcfa_auto(
   partial_search_full_release_action = "eligible"
 )
 
-# Note: for one-latent `lv.variances`/`means` stages, the fully freed
+# Note: for one-term stages (`lv.variances`, `lv.covariances`,
+# `residual.covariances`, `regressions`, `means`), the fully freed
 # exploratory candidate is evaluated automatically.
 
 # Multi-metric voting (3 rules, require at least 2 to pass)
