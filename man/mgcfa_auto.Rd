@@ -251,6 +251,8 @@ step encountered in sequence (if any).
 failed constrained step (if triggered).
 \item \code{recovered_partial}: logical flag indicating whether any constrained
 step was recovered by partial search.
+\item \code{not_applicable_steps}: per-step records for stages that were
+detected as not applicable (for example, no latent covariances in a one-factor model).
 \item \code{stopped_early}: logical flag indicating whether progression was
 stopped after an unacceptable stage.
 \item \code{stopped_after_step}: step name where progression stopped, when
@@ -283,6 +285,8 @@ For post-strict stages (\code{"lv.variances"}, \code{"lv.covariances"},
 \code{"residual.covariances"}, \code{"regressions"}, \code{"means"}),
 the function uses \code{"strict"} as the baseline model when acceptable,
 and otherwise falls back to \code{"scalar"}.
+Stages with no releasable constraints for the requested class are marked
+as not applicable and carried forward without forcing exploratory fitting.
 By default, latent-variance/covariance, residual-covariance, regression, and
 latent-mean stages use exhaustive candidate enumeration in automatic mode.
 }

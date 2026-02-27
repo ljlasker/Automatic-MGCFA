@@ -668,6 +668,7 @@ mgcfa_auto <- function(
 
   fits <- list()
   step_failures <- list()
+  not_applicable_steps <- list()
   partial_searches <- list()
   freed_parameters <- list()
   auto_partial_terms <- character()
@@ -747,9 +748,39 @@ mgcfa_auto <- function(
       means_constrain_lv_variances = isTRUE(means_constrain_lv_variances),
       include_regressions_for_means = include_regressions_for_means
     )
-    prev_geq <- if (!is.null(eval_prev_step)) step_geq_used[[eval_prev_step]] %||% character() else character()
+    prev_geq <- if (!is.null(prev_step)) step_geq_used[[prev_step]] %||% character() else character()
     added_constraints <- setdiff(geq %||% character(), prev_geq %||% character())
     step_geq_used[[step]] <- geq %||% character()
+
+    if (!identical(step, "configural") &&
+        !is.null(prev_fit) &&
+        length(added_constraints) > 0L &&
+        !isTRUE(.mgcfa_stage_has_releasable_terms(prev_fit, added_constraints))) {
+      fits[[step]] <- prev_fit
+      fail_info <- list(
+        failed = FALSE,
+        not_applicable = TRUE,
+        reason = sprintf(
+          "Step `%s` is not applicable for this model (no releasable constraints in: %s).",
+          step,
+          paste(added_constraints, collapse = ", ")
+        ),
+        criterion = NA_character_,
+        threshold = NA_real_,
+        value = NA_real_,
+        gap = NA_real_,
+        from_step = eval_prev_step %||% NA_character_,
+        to_step = step,
+        failed_fit = NULL,
+        failed_fit_measures = NULL,
+        details = list(
+          added_constraints = added_constraints
+        )
+      )
+      step_failures[[step]] <- fail_info
+      not_applicable_steps[[step]] <- fail_info
+      next
+    }
 
     step_partial <- character()
     if (!is.null(partial) && !is.null(partial[[step]])) {
@@ -1096,6 +1127,7 @@ mgcfa_auto <- function(
     partial_failure = partial_failure,
     partial_search = partial_search,
     recovered_partial = recovered_partial,
+    not_applicable_steps = not_applicable_steps,
     stopped_early = stopped_early,
     stopped_after_step = stopped_after_step,
     stopped_reason = stopped_reason
@@ -1136,6 +1168,9 @@ print.mgcfa_result <- function(
   if (nrow(overview) > 0L) {
     overview <- .mgcfa_format_numeric_df(overview, digits = digits, rounding = rounding)
     print(overview, row.names = FALSE)
+  }
+  if (!is.null(x$not_applicable_steps) && length(x$not_applicable_steps) > 0L) {
+    cat("\nNot-applicable steps:", paste(names(x$not_applicable_steps), collapse = ", "), "\n")
   }
   if (isTRUE(x$stopped_early)) {
     cat("\nStopped early at step:", x$stopped_after_step %||% "unknown", "\n")
@@ -1609,7 +1644,9 @@ mgcfa_plot_fit <- function(
     fm <- suppressWarnings(lavaan::fitMeasures(x$fits[[step]], c("cfi", "rmsea", "srmr", "aic", "bic")))
     freed <- .mgcfa_normalize_terms(x$freed_parameters[[step]] %||% character())
     fail_rec <- x$step_failures[[step]]
-    status <- if (is.null(fail_rec) || !isTRUE(fail_rec$failed)) {
+    status <- if (!is.null((x$not_applicable_steps %||% list())[[step]])) {
+      "not_applicable"
+    } else if (is.null(fail_rec) || !isTRUE(fail_rec$failed)) {
       "ok"
     } else if (step %in% (x$recovered_steps %||% character())) {
       "recovered_partial"
@@ -1993,6 +2030,61 @@ mgcfa_plot_fit <- function(
   step %in% as.character(recovered_steps %||% character())
 }
 
+.mgcfa_stage_has_releasable_terms <- function(fit, target_constraints) {
+  target_constraints <- unique(as.character(target_constraints %||% character()))
+  if (is.null(fit) || length(target_constraints) == 0L) {
+    return(FALSE)
+  }
+
+  pt <- tryCatch(
+    lavaan::parTable(fit),
+    error = function(e) NULL
+  )
+  if (is.null(pt) || nrow(pt) == 0L) {
+    return(FALSE)
+  }
+
+  ov_names <- tryCatch(lavaan::lavNames(fit, type = "ov"), error = function(e) character())
+  lv_names <- tryCatch(lavaan::lavNames(fit, type = "lv"), error = function(e) character())
+
+  rows <- vector("list", nrow(pt))
+  out_i <- 0L
+  for (i in seq_len(nrow(pt))) {
+    free_i <- suppressWarnings(as.numeric(pt$free[[i]]))
+    if (!is.finite(free_i) || free_i <= 0) {
+      next
+    }
+    cls <- .mgcfa_constraint_class(
+      op = as.character(pt$op[[i]]),
+      lhs = as.character(pt$lhs[[i]]),
+      rhs = as.character(pt$rhs[[i]]),
+      ov_names = ov_names,
+      lv_names = lv_names
+    )
+    if (is.na(cls) || !(cls %in% target_constraints)) {
+      next
+    }
+    out_i <- out_i + 1L
+    rows[[out_i]] <- data.frame(
+      term = .mgcfa_term_from_parts(
+        lhs = as.character(pt$lhs[[i]]),
+        op = as.character(pt$op[[i]]),
+        rhs = as.character(pt$rhs[[i]])
+      ),
+      group = as.integer(pt$group[[i]]),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (out_i == 0L) {
+    return(FALSE)
+  }
+  out <- do.call(rbind, rows[seq_len(out_i)])
+  out <- unique(out)
+  n_group_by_term <- tapply(out$group, out$term, function(g) length(unique(g)))
+  any(n_group_by_term >= 2L)
+}
+
 .mgcfa_step_group_equal <- function(
   step,
   anchor = c("strict", "scalar"),
@@ -2045,6 +2137,80 @@ mgcfa_plot_fit <- function(
   }
 
   stop("Unsupported invariance step: `", step, "`.", call. = FALSE)
+}
+
+.mgcfa_nested_lrt_compare <- function(previous_fit, candidate_fit) {
+  fallback <- function() {
+    chisq_prev <- as.numeric(lavaan::fitMeasures(previous_fit, "chisq"))
+    chisq_cand <- as.numeric(lavaan::fitMeasures(candidate_fit, "chisq"))
+    df_prev <- as.numeric(lavaan::fitMeasures(previous_fit, "df"))
+    df_cand <- as.numeric(lavaan::fitMeasures(candidate_fit, "df"))
+    d_chisq <- chisq_cand - chisq_prev
+    d_df <- df_cand - df_prev
+    p_val <- if (is.finite(d_chisq) && is.finite(d_df) && d_df > 0) {
+      stats::pchisq(d_chisq, df = d_df, lower.tail = FALSE)
+    } else if (is.finite(d_df) && d_df <= 0) {
+      1
+    } else {
+      NA_real_
+    }
+    list(
+      chisq_diff = as.numeric(d_chisq),
+      df_diff = as.numeric(d_df),
+      p_value = as.numeric(p_val),
+      method = "manual_diff"
+    )
+  }
+
+  lrt <- tryCatch(
+    lavaan::lavTestLRT(previous_fit, candidate_fit),
+    error = function(e) NULL
+  )
+  if (is.null(lrt)) {
+    return(fallback())
+  }
+
+  df_lrt <- tryCatch(as.data.frame(lrt), error = function(e) NULL)
+  if (is.null(df_lrt) || nrow(df_lrt) < 2L) {
+    return(fallback())
+  }
+
+  norm_names <- gsub("[^a-z0-9]+", "", tolower(names(df_lrt)))
+  get_col <- function(candidates) {
+    idx <- match(candidates, norm_names, nomatch = 0L)
+    idx <- idx[idx > 0L]
+    if (length(idx) < 1L) return(integer())
+    idx[[1L]]
+  }
+
+  chisq_col <- get_col(c("chisqdiff", "scaledchisqdiff"))
+  df_col <- get_col(c("dfdiff"))
+  p_col <- get_col(c("prchisq", "pvalue"))
+
+  row_idx <- nrow(df_lrt)
+  d_chisq <- if (length(chisq_col) == 1L) as.numeric(df_lrt[[chisq_col]][row_idx]) else NA_real_
+  d_df <- if (length(df_col) == 1L) as.numeric(df_lrt[[df_col]][row_idx]) else NA_real_
+  p_val <- if (length(p_col) == 1L) as.numeric(df_lrt[[p_col]][row_idx]) else NA_real_
+
+  if (!is.finite(p_val)) {
+    p_val <- if (is.finite(d_chisq) && is.finite(d_df) && d_df > 0) {
+      stats::pchisq(d_chisq, df = d_df, lower.tail = FALSE)
+    } else if (is.finite(d_df) && d_df <= 0) {
+      1
+    } else {
+      NA_real_
+    }
+  }
+  if (!is.finite(d_chisq) || !is.finite(d_df)) {
+    return(fallback())
+  }
+
+  list(
+    chisq_diff = as.numeric(d_chisq),
+    df_diff = as.numeric(d_df),
+    p_value = as.numeric(p_val),
+    method = "lavTestLRT"
+  )
 }
 
 .mgcfa_added_constraints <- function(step_equal, step, prev_step = NULL) {
@@ -2103,19 +2269,13 @@ mgcfa_plot_fit <- function(
   }
 
   if (identical(criterion, "chisq_pvalue")) {
-    chisq_metric <- as.numeric(lavaan::fitMeasures(previous_fit, "chisq"))
-    chisq_candidate <- as.numeric(lavaan::fitMeasures(candidate_fit, "chisq"))
-    df_metric <- as.numeric(lavaan::fitMeasures(previous_fit, "df"))
-    df_candidate <- as.numeric(lavaan::fitMeasures(candidate_fit, "df"))
-    d_chisq <- chisq_candidate - chisq_metric
-    d_df <- df_candidate - df_metric
-    p_value <- if (is.finite(d_chisq) && is.finite(d_df) && d_df > 0) {
-      stats::pchisq(d_chisq, df = d_df, lower.tail = FALSE)
-    } else if (is.finite(d_df) && d_df <= 0) {
-      1
-    } else {
-      NA_real_
-    }
+    nested <- .mgcfa_nested_lrt_compare(
+      previous_fit = previous_fit,
+      candidate_fit = candidate_fit
+    )
+    d_chisq <- as.numeric(nested$chisq_diff)
+    d_df <- as.numeric(nested$df_diff)
+    p_value <- as.numeric(nested$p_value)
     gap <- p_value - threshold
     pass <- is.finite(gap) && gap >= 0
     return(list(
@@ -2125,7 +2285,8 @@ mgcfa_plot_fit <- function(
       gap = gap,
       details = list(
         chisq_diff = d_chisq,
-        df_diff = d_df
+        df_diff = d_df,
+        method = as.character(nested$method %||% NA_character_)
       )
     ))
   }
@@ -2648,6 +2809,10 @@ mgcfa_plot_fit <- function(
   rows <- vector("list", nrow(pt))
   out_i <- 0L
   for (i in seq_len(nrow(pt))) {
+    free_i <- suppressWarnings(as.numeric(pt$free[[i]]))
+    if (!is.finite(free_i) || free_i <= 0) {
+      next
+    }
     cls <- .mgcfa_constraint_class(
       op = as.character(pt$op[[i]]),
       lhs = as.character(pt$lhs[[i]]),
@@ -3077,23 +3242,14 @@ mgcfa_plot_fit <- function(
   for (i in 2:length(fits)) {
     prev <- fits[[i - 1L]]
     cur <- fits[[i]]
-    c_prev <- lavaan::fitMeasures(prev, "chisq")
-    c_cur <- lavaan::fitMeasures(cur, "chisq")
-    d_prev <- lavaan::fitMeasures(prev, "df")
-    d_cur <- lavaan::fitMeasures(cur, "df")
-    d_chisq <- as.numeric(c_cur - c_prev)
-    d_df <- as.numeric(d_cur - d_prev)
-    p_val <- if (is.finite(d_chisq) && is.finite(d_df) && d_df > 0) {
-      stats::pchisq(d_chisq, df = d_df, lower.tail = FALSE)
-    } else {
-      NA_real_
-    }
+    nested <- .mgcfa_nested_lrt_compare(previous_fit = prev, candidate_fit = cur)
     out[[i - 1L]] <- data.frame(
       from = step_names[i - 1L],
       to = step_names[i],
-      chisq_diff = d_chisq,
-      df_diff = d_df,
-      p_value = p_val,
+      chisq_diff = as.numeric(nested$chisq_diff),
+      df_diff = as.numeric(nested$df_diff),
+      p_value = as.numeric(nested$p_value),
+      method = as.character(nested$method %||% NA_character_),
       stringsAsFactors = FALSE
     )
   }

@@ -22,6 +22,7 @@ remotes::install_github("ljlasker/Automatic-MGCFA")
 - Detect failed constrained stages using chi-square change p-value or delta CFI.
 - Run automatic partial-invariance search at failed stages (prompt, never, or always).
 - Automatically evaluate exhaustive higher-stage subsets for `lv.variances`, `lv.covariances`, `residual.covariances`, `regressions`, and `means` (for example, general-only, general+subset, up to nearly unconstrained).
+- Automatically mark stage tests as not-applicable when a constraint class is absent (for example, latent covariances in a one-factor model).
 - By default, stop progression after the first constrained stage that remains unacceptable.
 - Preserve failed non-partial outputs for failed constrained stages in `out$failed_step_outputs`.
 - Return tidy fit tables and plotting-ready outputs.
@@ -154,7 +155,8 @@ print(p2)
 ```
 
 Default plotting labels use stage names such as `Configural`, `Metric`,
-`Scalar`, `Strict`, `Latent Variance(s)`, and `Latent Mean(s)`.
+`Scalar`, `Strict`, `Latent Variance(s)`, `Latent Covariances`,
+`Residual Covariances`, `Regressions`, and `Latent Mean(s)`.
 
 ## Tidy Output for Custom Reporting
 
