@@ -12,9 +12,11 @@ mgcfa_auto(
   loading_threshold = 0.3,
   rotation = "oblimin",
   allow_cross_loadings = FALSE,
+  input = NULL,
   data = NULL,
   group = NULL,
   sample_cov = NULL,
+  sample_cor = NULL,
   sample_mean = NULL,
   sample_nobs = NULL,
   group_labels = NULL,
@@ -87,11 +89,18 @@ syntax.}
 
 \item{allow_cross_loadings}{Logical for EFA/PCA syntax generation.}
 
+\item{input}{Optional object returned by \code{mgcfa_prepare_input()}.
+When supplied, raw/summary input arguments are taken from this object.}
+
 \item{data}{Raw-data input (data.frame) for multi-group SEM.}
 
 \item{group}{Grouping variable name in \code{data}.}
 
 \item{sample_cov}{Matrix or list of group covariance/correlation matrices.}
+
+\item{sample_cor}{Optional alias for correlation-matrix input. Equivalent to
+supplying \code{sample_cov = sample_cor} with
+\code{matrices_are_cor = TRUE}.}
 
 \item{sample_mean}{Optional vector/list of group means (required for scalar
 and stricter steps in matrix mode).}

@@ -54,6 +54,41 @@ print(out, verbose = TRUE)
 # out$failed_step_outputs
 ```
 
+## Easiest Input Route
+
+Use `mgcfa_prepare_input()` to normalize whatever you have, then pass that
+into `mgcfa_auto(input = ...)`.
+
+```r
+# 1) Raw data
+inp_raw <- mgcfa_prepare_input(data = dat, group = "grp")
+print(inp_raw)
+
+out_raw <- mgcfa_auto(
+  model_type = "custom",
+  model = "g =~ x1 + x2 + x3 + x4",
+  input = inp_raw
+)
+
+# 2) Correlation matrices (+ Ns; SDs auto-filled if needed)
+inp_cor <- mgcfa_prepare_input(
+  sample_cor = cor_list,
+  sample_nobs = n_list,
+  sample_mean = mean_list,
+  cor_without_sd_action = "auto_unit"
+)
+
+out_cor <- mgcfa_auto(
+  model_type = "custom",
+  model = "g =~ x1 + x2 + x3 + x4",
+  input = inp_cor,
+  include_steps = c("configural", "metric")
+)
+
+# 3) Quick guidance table
+mgcfa_help_inputs()
+```
+
 ## Alternative Partial-Search Criteria
 
 ```r
