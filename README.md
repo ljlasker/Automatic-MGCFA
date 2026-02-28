@@ -29,6 +29,13 @@ remotes::install_github("ljlasker/Automatic-MGCFA")
 - Return tidy fit tables, practical step-change summaries (`out$practical_change_table`), and decision traces (`out$decision_trace`).
 - Compute signed bias effect sizes (`mgcfa_bias_effects`) for observed composites/items and latent mean/SD comparisons.
 
+## Interactive App
+
+```r
+# Guided UI for raw or summary workflows
+mgcfa_launch_app()
+```
+
 ## Quick Start
 
 ```r
