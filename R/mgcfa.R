@@ -97,7 +97,14 @@ mgcfa_build_model <- function(
 #' @param data Data frame containing indicators and a grouping variable.
 #' @param group Grouping variable name in \code{data}.
 #' @param variables Character vector of indicator names.
-#' @param matrix_type One of \code{"cor"} or \code{"cov"}.
+#' @param summary_profile Summary preset. \code{"raw_equivalent"} (default)
+#'   targets reproducibility versus raw-data MGCFA by using covariance matrices
+#'   and no decimal formatting. \code{"paper"} uses compact table-style summary
+#'   output (correlation matrices + SDs by default, truncated decimals unless
+#'   overridden). \code{"custom"} uses the supplied \code{matrix_type},
+#'   \code{format}, and digit options directly.
+#' @param matrix_type One of \code{"cor"} or \code{"cov"}. If \code{NULL},
+#'   defaults are chosen from \code{summary_profile}.
 #' @param cor_digits Decimal places for correlation matrices when
 #'   \code{matrix_type = "cor"}. Ignored when \code{NULL}.
 #' @param sd_digits Decimal places for group SD vectors when
@@ -106,28 +113,60 @@ mgcfa_build_model <- function(
 #' @param cov_digits Decimal places for covariance matrices when
 #'   \code{matrix_type = "cov"}. Ignored when \code{NULL}.
 #' @param format Decimal formatting method: \code{"none"},
-#'   \code{"truncate"}, or \code{"round"}.
+#'   \code{"truncate"}, or \code{"round"}. If \code{NULL}, defaults are chosen
+#'   from \code{summary_profile}.
 #' @param drop_incomplete Logical; if \code{TRUE}, uses complete cases for
 #'   \code{variables} within each group.
-#'
+#' 
 #' @return A list containing \code{sample_cov}, \code{sample_mean},
 #'   \code{sample_nobs}, and \code{group_labels}, plus \code{matrices_are_cor}
-#'   and \code{sample_sd} (NULL in covariance mode).
+#'   and \code{sample_sd} (NULL in covariance mode). Also returns
+#'   \code{summary_profile} and \code{mgcfa_args}, a ready-to-pass argument list
+#'   for \code{mgcfa_auto()} matrix mode.
 #' @export
 mgcfa_make_summary <- function(
   data,
   group,
   variables,
-  matrix_type = c("cor", "cov"),
+  summary_profile = c("raw_equivalent", "paper", "custom"),
+  matrix_type = NULL,
   cor_digits = NULL,
   sd_digits = NULL,
   mean_digits = NULL,
   cov_digits = NULL,
-  format = c("none", "truncate", "round"),
+  format = NULL,
   drop_incomplete = TRUE
 ) {
-  matrix_type <- match.arg(matrix_type)
-  format <- match.arg(format)
+  summary_profile <- match.arg(summary_profile)
+  if (is.null(matrix_type)) {
+    matrix_type <- switch(
+      summary_profile,
+      raw_equivalent = "cov",
+      paper = "cor",
+      custom = "cor"
+    )
+  }
+  matrix_type <- match.arg(matrix_type, choices = c("cor", "cov"))
+
+  if (is.null(format)) {
+    format <- switch(
+      summary_profile,
+      raw_equivalent = "none",
+      paper = "truncate",
+      custom = "none"
+    )
+  }
+  format <- match.arg(format, choices = c("none", "truncate", "round"))
+
+  if (identical(summary_profile, "paper")) {
+    if (identical(matrix_type, "cor")) {
+      cor_digits <- cor_digits %||% 2L
+      sd_digits <- sd_digits %||% 2L
+    } else {
+      cov_digits <- cov_digits %||% 2L
+    }
+    mean_digits <- mean_digits %||% 2L
+  }
 
   if (!is.data.frame(data)) {
     stop("`data` must be a data.frame.", call. = FALSE)
@@ -220,14 +259,24 @@ mgcfa_make_summary <- function(
     sample_nobs[[i]] <- n_i
   }
 
-  list(
+  out <- list(
     sample_cov = sample_cov,
     sample_sd = sample_sd,
     sample_mean = sample_mean,
     sample_nobs = sample_nobs,
     group_labels = groups,
-    matrices_are_cor = identical(matrix_type, "cor")
+    matrices_are_cor = identical(matrix_type, "cor"),
+    summary_profile = summary_profile
   )
+  out$mgcfa_args <- list(
+    sample_cov = out$sample_cov,
+    sample_mean = out$sample_mean,
+    sample_nobs = out$sample_nobs,
+    group_labels = out$group_labels,
+    matrices_are_cor = out$matrices_are_cor,
+    sample_sd = out$sample_sd
+  )
+  out
 }
 
 #' Run Automatic MGCFA from Raw Data or Matrices
@@ -1532,6 +1581,69 @@ mgcfa_tidy_fit <- function(
   if (any(num_cols)) {
     df[num_cols] <- lapply(df[num_cols], .mgcfa_round_values, digits = digits, rounding = rounding)
   }
+  df
+}
+
+#' Compare Raw vs Summary MGCFA Results
+#'
+#' Compares fit indices from a raw-data MGCFA run and a summary-matrix MGCFA run
+#' across shared steps.
+#'
+#' @param raw_result An object returned by \code{mgcfa_auto()} from raw data.
+#' @param summary_result An object returned by \code{mgcfa_auto()} from summary
+#'   matrices.
+#' @param measures Fit measures to compare.
+#' @param tolerance Absolute difference tolerance for equivalence flags.
+#'
+#' @return A data.frame with per-step fit differences and
+#'   \code{within_tolerance}. An \code{overall_within_tolerance} attribute is
+#'   attached.
+#' @export
+mgcfa_compare_results <- function(
+  raw_result,
+  summary_result,
+  measures = c("chisq", "df", "cfi", "rmsea", "srmr", "aic", "bic"),
+  tolerance = 1e-4
+) {
+  raw_result <- .mgcfa_as_result(raw_result)
+  summary_result <- .mgcfa_as_result(summary_result)
+  measures <- unique(as.character(measures))
+  if (length(measures) == 0L) {
+    stop("`measures` must include at least one fit measure.", call. = FALSE)
+  }
+  tolerance <- as.numeric(tolerance)[[1L]]
+  if (!is.finite(tolerance) || tolerance < 0) {
+    stop("`tolerance` must be a non-negative numeric scalar.", call. = FALSE)
+  }
+
+  steps <- intersect(names(raw_result$fits), names(summary_result$fits))
+  if (length(steps) == 0L) {
+    stop("No overlapping steps to compare between the two results.", call. = FALSE)
+  }
+
+  out <- list()
+  out_i <- 0L
+  for (step in steps) {
+    fm_raw <- suppressWarnings(lavaan::fitMeasures(raw_result$fits[[step]], measures))
+    fm_sum <- suppressWarnings(lavaan::fitMeasures(summary_result$fits[[step]], measures))
+    for (m in measures) {
+      out_i <- out_i + 1L
+      raw_val <- as.numeric(fm_raw[[m]] %||% NA_real_)
+      sum_val <- as.numeric(fm_sum[[m]] %||% NA_real_)
+      abs_diff <- abs(sum_val - raw_val)
+      out[[out_i]] <- data.frame(
+        step = step,
+        measure = m,
+        raw_value = raw_val,
+        summary_value = sum_val,
+        abs_diff = abs_diff,
+        within_tolerance = is.finite(abs_diff) && abs_diff <= tolerance,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  df <- do.call(rbind, out)
+  attr(df, "overall_within_tolerance") <- all(df$within_tolerance, na.rm = TRUE)
   df
 }
 

@@ -8,12 +8,13 @@ mgcfa_make_summary(
   data,
   group,
   variables,
-  matrix_type = c("cor", "cov"),
+  summary_profile = c("raw_equivalent", "paper", "custom"),
+  matrix_type = NULL,
   cor_digits = NULL,
   sd_digits = NULL,
   mean_digits = NULL,
   cov_digits = NULL,
-  format = c("none", "truncate", "round"),
+  format = NULL,
   drop_incomplete = TRUE
 )
 }
@@ -24,7 +25,15 @@ mgcfa_make_summary(
 
 \item{variables}{Character vector of indicator names.}
 
-\item{matrix_type}{One of \code{"cor"} or \code{"cov"}.}
+\item{summary_profile}{Summary preset. \code{"raw_equivalent"} (default)
+targets reproducibility versus raw-data MGCFA by using covariance matrices
+and no decimal formatting. \code{"paper"} uses compact table-style summary
+output (correlation matrices + SDs by default, truncated decimals unless
+overridden). \code{"custom"} uses the supplied \code{matrix_type},
+\code{format}, and digit options directly.}
+
+\item{matrix_type}{One of \code{"cor"} or \code{"cov"}. If \code{NULL},
+defaults are chosen from \code{summary_profile}.}
 
 \item{cor_digits}{Decimal places for correlation matrices when
 \code{matrix_type = "cor"}. Ignored when \code{NULL}.}
@@ -38,7 +47,8 @@ mgcfa_make_summary(
 \code{matrix_type = "cov"}. Ignored when \code{NULL}.}
 
 \item{format}{Decimal formatting method: \code{"none"},
-\code{"truncate"}, or \code{"round"}.}
+\code{"truncate"}, or \code{"round"}. If \code{NULL}, defaults are chosen
+from \code{summary_profile}.}
 
 \item{drop_incomplete}{Logical; if \code{TRUE}, uses complete cases for
 \code{variables} within each group.}
@@ -46,7 +56,9 @@ mgcfa_make_summary(
 \value{
 A list containing \code{sample_cov}, \code{sample_mean},
 \code{sample_nobs}, and \code{group_labels}, plus \code{matrices_are_cor}
-and \code{sample_sd} (NULL in covariance mode).
+and \code{sample_sd} (NULL in covariance mode). Also returns
+\code{summary_profile} and \code{mgcfa_args}, a ready-to-pass argument list
+for \code{mgcfa_auto()} matrix mode.
 }
 \description{
 Creates group-wise summary inputs compatible with \code{mgcfa_auto()} from

@@ -217,19 +217,15 @@ If you see `x must be an object returned by mgcfa_auto()`, pass the full
 ## Summary-Matrix Workflow
 
 ```r
-# Build paper-style summary inputs (e.g., r = 0.45, SD = 1.01)
+# Build raw-equivalent summary inputs (default): optimized to reproduce
+# raw-data MGCFA decisions as closely as possible.
 sum_in <- mgcfa_make_summary(
   data = dat,
   group = "grp",
-  variables = c("x1", "x2", "x3", "x4"),
-  matrix_type = "cor",
-  format = "truncate",
-  cor_digits = 2,
-  sd_digits = 2,
-  mean_digits = 2
+  variables = c("x1", "x2", "x3", "x4")
 )
 
-out <- mgcfa_auto(
+out_summary <- mgcfa_auto(
   model_type = "custom",
   model = "g =~ x1 + x2 + x3 + x4",
   sample_cov = sum_in$sample_cov,
@@ -239,6 +235,28 @@ out <- mgcfa_auto(
   sample_nobs = sum_in$sample_nobs,
   group_labels = sum_in$group_labels
 )
+
+# Equivalent shortcut:
+# out_summary <- do.call(mgcfa_auto, c(list(model_type = "custom", model = "g =~ x1 + x2 + x3 + x4"), sum_in$mgcfa_args))
+
+# Optional paper-style compact summary tables:
+sum_paper <- mgcfa_make_summary(
+  data = dat,
+  group = "grp",
+  variables = c("x1", "x2", "x3", "x4"),
+  summary_profile = "paper"   # defaults to truncated 2-decimal compact output
+)
+
+# Compare raw-data and summary-matrix outputs
+out_raw <- mgcfa_auto(
+  model_type = "custom",
+  model = "g =~ x1 + x2 + x3 + x4",
+  data = dat,
+  group = "grp"
+)
+cmp <- mgcfa_compare_results(out_raw, out_summary, tolerance = 1e-4)
+head(cmp)
+attr(cmp, "overall_within_tolerance")
 ```
 
 ## Automatic Model Generation
