@@ -150,6 +150,15 @@ mgcfa_app <- function() {
             shiny::numericInput("failure_rule_min", "Failure minimum passing rules", value = 2, min = 1, step = 1)
           )
         ),
+        shiny::checkboxInput(
+          "use_failure_rules_by_step",
+          "Add step-specific failure rule overrides",
+          value = FALSE
+        ),
+        shiny::conditionalPanel(
+          "input.use_failure_rules_by_step == true",
+          shiny::uiOutput("failure_rules_by_step_ui")
+        ),
         shiny::selectInput(
           "partial_search_criterion",
           "Partial-search criterion",
@@ -198,6 +207,15 @@ mgcfa_app <- function() {
             shiny::numericInput("search_rule_min", "Partial-search minimum passing rules", value = 2, min = 1, step = 1)
           )
         ),
+        shiny::checkboxInput(
+          "use_search_rules_by_step",
+          "Add step-specific partial-search rule overrides",
+          value = FALSE
+        ),
+        shiny::conditionalPanel(
+          "input.use_search_rules_by_step == true",
+          shiny::uiOutput("search_rules_by_step_ui")
+        ),
         shiny::numericInput(
           "partial_ic_bic_weight",
           "BIC weight for AIC/BIC-weight criteria (AIC = 1 - BIC)",
@@ -211,8 +229,14 @@ mgcfa_app <- function() {
           "AIC-only = aic_weight, BIC-only = bic_weight, or use aic_bic_weight with custom BIC weight.",
           "For measure_change, any valid lavaan fit measure name can be used (including those provided by installed extensions)."
         ),
+        shiny::checkboxInput(
+          "allow_nonstandard_measures",
+          "Allow non-standard fit-measure names (skip strict validation)",
+          value = FALSE
+        ),
 
-        shiny::actionButton("run_mgcfa", "Run MGCFA", class = "btn-primary")
+        shiny::actionButton("run_mgcfa", "Run MGCFA", class = "btn-primary"),
+        shiny::uiOutput("control_validation_ui")
       ),
       shiny::mainPanel(
         shiny::tabsetPanel(
@@ -226,6 +250,11 @@ mgcfa_app <- function() {
             "Results",
             shiny::h4("Run Status"),
             shiny::verbatimTextOutput("run_status_text"),
+            shiny::fluidRow(
+              shiny::column(width = 4, shiny::downloadButton("download_overview_csv", "Download Overview CSV")),
+              shiny::column(width = 4, shiny::downloadButton("download_decision_csv", "Download Decision Trace CSV")),
+              shiny::column(width = 4, shiny::downloadButton("download_failures_csv", "Download Failures CSV"))
+            ),
             shiny::h4("Stage Overview"),
             shiny::tableOutput("overview_table"),
             shiny::h4("Failures / Not Applicable"),
@@ -243,6 +272,10 @@ mgcfa_app <- function() {
               shiny::column(
                 width = 4,
                 shiny::radioButtons("plot_type", "Plot type", choices = c("Delta" = "delta", "Raw" = "raw"), inline = TRUE)
+              ),
+              shiny::column(
+                width = 4,
+                shiny::downloadButton("download_plot_png", "Download Plot PNG")
               )
             ),
             shiny::plotOutput("fit_plot", height = "520px")
@@ -253,7 +286,13 @@ mgcfa_app <- function() {
   )
 
   server <- function(input, output, session) {
-    rv <- shiny::reactiveValues(result = NULL, report = NULL, error = NULL, warnings = character())
+    rv <- shiny::reactiveValues(
+      result = NULL,
+      report = NULL,
+      error = NULL,
+      control_error = NULL,
+      warnings = character()
+    )
 
     raw_data <- shiny::reactive({
       shiny::req(input$data_mode == "raw")
@@ -286,6 +325,36 @@ mgcfa_app <- function() {
       n <- max(1L, min(8L, if (is.na(n)) 1L else n))
       rows <- lapply(seq_len(n), function(i) .mgcfa_app_rule_row_ui("search", i))
       do.call(shiny::tagList, rows)
+    })
+
+    output$failure_rules_by_step_ui <- shiny::renderUI({
+      shiny::req(isTRUE(input$use_failure_rules_by_step))
+      steps <- setdiff(as.character(input$include_steps %||% character()), "configural")
+      if (length(steps) == 0L) {
+        return(shiny::helpText("Select at least one post-configural stage to configure step-specific overrides."))
+      }
+      rows <- lapply(steps, function(st) .mgcfa_app_step_rule_panel(prefix = "failure", step = st))
+      do.call(shiny::tagList, rows)
+    })
+
+    output$search_rules_by_step_ui <- shiny::renderUI({
+      shiny::req(isTRUE(input$use_search_rules_by_step))
+      steps <- setdiff(as.character(input$include_steps %||% character()), "configural")
+      if (length(steps) == 0L) {
+        return(shiny::helpText("Select at least one post-configural stage to configure step-specific overrides."))
+      }
+      rows <- lapply(steps, function(st) .mgcfa_app_step_rule_panel(prefix = "search", step = st))
+      do.call(shiny::tagList, rows)
+    })
+
+    output$control_validation_ui <- shiny::renderUI({
+      if (is.null(rv$control_error) || !nzchar(rv$control_error)) {
+        return(NULL)
+      }
+      shiny::div(
+        style = "margin-top: 10px; color: #B00020; font-weight: 600;",
+        rv$control_error
+      )
     })
 
     shiny::observeEvent(raw_data(), {
@@ -329,6 +398,7 @@ mgcfa_app <- function() {
 
     shiny::observeEvent(input$run_mgcfa, {
       rv$error <- NULL
+      rv$control_error <- NULL
       rv$warnings <- character()
       rv$result <- NULL
       rv$report <- NULL
@@ -342,6 +412,8 @@ mgcfa_app <- function() {
           partial_search_criterion = "chisq_pvalue",
           stop_at_first_unacceptable = isTRUE(input$stop_early)
         )
+
+        args$partial_ic_bic_weight <- as.numeric(input$partial_ic_bic_weight %||% 0.5)
         if (isTRUE(input$use_failure_rules)) {
           n_fail <- as.integer(input$failure_n_rules %||% 1L)
           n_fail <- max(1L, min(8L, if (is.na(n_fail)) 1L else n_fail))
@@ -383,6 +455,23 @@ mgcfa_app <- function() {
           }
           if (!is.null(fail_cfg$ic_bic_weight)) {
             args$partial_ic_bic_weight <- fail_cfg$ic_bic_weight
+          }
+        }
+
+        if (isTRUE(input$use_failure_rules_by_step)) {
+          fail_step_cfg <- .mgcfa_app_build_step_rule_overrides(
+            values = input,
+            steps = setdiff(as.character(input$include_steps %||% character()), "configural"),
+            prefix = "failure"
+          )
+          if (length(fail_step_cfg$rules_by_step) > 0L) {
+            args$partial_failure_rules_by_step <- fail_step_cfg$rules_by_step
+          }
+          if (length(fail_step_cfg$policy_by_step) > 0L) {
+            args$partial_failure_rule_policy_by_step <- fail_step_cfg$policy_by_step
+          }
+          if (length(fail_step_cfg$min_by_step) > 0L) {
+            args$partial_failure_rule_min_by_step <- fail_step_cfg$min_by_step
           }
         }
 
@@ -430,6 +519,23 @@ mgcfa_app <- function() {
           }
         }
 
+        if (isTRUE(input$use_search_rules_by_step)) {
+          search_step_cfg <- .mgcfa_app_build_step_rule_overrides(
+            values = input,
+            steps = setdiff(as.character(input$include_steps %||% character()), "configural"),
+            prefix = "search"
+          )
+          if (length(search_step_cfg$rules_by_step) > 0L) {
+            args$partial_search_rules_by_step <- search_step_cfg$rules_by_step
+          }
+          if (length(search_step_cfg$policy_by_step) > 0L) {
+            args$partial_search_rule_policy_by_step <- search_step_cfg$policy_by_step
+          }
+          if (length(search_step_cfg$min_by_step) > 0L) {
+            args$partial_search_rule_min_by_step <- search_step_cfg$min_by_step
+          }
+        }
+
         if (identical(input$model_type, "custom")) {
           model_txt <- trimws(input$model_syntax %||% "")
           if (!nzchar(model_txt)) {
@@ -469,6 +575,11 @@ mgcfa_app <- function() {
           args$matrices_are_cor <- isTRUE(s$matrices_are_cor)
         }
 
+        .mgcfa_app_validate_run_args(
+          args = args,
+          allow_nonstandard_measures = isTRUE(input$allow_nonstandard_measures)
+        )
+
         warn_buf <- character()
         fit <- withCallingHandlers(
           do.call(mgcfa_auto, args),
@@ -483,10 +594,12 @@ mgcfa_app <- function() {
 
       if (inherits(fit_or_err, "error")) {
         rv$error <- conditionMessage(fit_or_err)
+        rv$control_error <- rv$error
         shiny::showNotification(rv$error, type = "error", duration = NULL)
       } else {
         rv$result <- fit_or_err
         rv$report <- mgcfa_report(fit_or_err, include_plots = FALSE)
+        rv$control_error <- NULL
         shiny::showNotification("MGCFA run completed.", type = "message", duration = 3)
       }
     })
@@ -529,6 +642,49 @@ mgcfa_app <- function() {
       rv$report$decision_trace
     }, rownames = FALSE)
 
+    output$download_overview_csv <- shiny::downloadHandler(
+      filename = function() {
+        paste0("mgcfa-overview-", format(Sys.Date(), "%Y%m%d"), ".csv")
+      },
+      content = function(file) {
+        dat <- rv$report$overview %||% data.frame()
+        utils::write.csv(dat, file, row.names = FALSE)
+      }
+    )
+
+    output$download_decision_csv <- shiny::downloadHandler(
+      filename = function() {
+        paste0("mgcfa-decision-trace-", format(Sys.Date(), "%Y%m%d"), ".csv")
+      },
+      content = function(file) {
+        dat <- rv$report$decision_trace %||% data.frame()
+        utils::write.csv(dat, file, row.names = FALSE)
+      }
+    )
+
+    output$download_failures_csv <- shiny::downloadHandler(
+      filename = function() {
+        paste0("mgcfa-failures-", format(Sys.Date(), "%Y%m%d"), ".csv")
+      },
+      content = function(file) {
+        dat <- rv$report$failures %||% data.frame()
+        utils::write.csv(dat, file, row.names = FALSE)
+      }
+    )
+
+    fit_plot_obj <- shiny::reactive({
+      shiny::req(rv$result)
+      if (!requireNamespace("ggplot2", quietly = TRUE)) {
+        return(NULL)
+      }
+      mgcfa_plot_fit(
+        rv$result,
+        measures = input$plot_measure,
+        include_non_partial = TRUE,
+        plot_type = input$plot_type
+      )
+    })
+
     output$fit_plot <- shiny::renderPlot({
       shiny::req(rv$result)
       if (!requireNamespace("ggplot2", quietly = TRUE)) {
@@ -536,14 +692,23 @@ mgcfa_app <- function() {
         graphics::text(0.5, 0.5, "Install ggplot2 to show plots.")
         return(invisible(NULL))
       }
-      p <- mgcfa_plot_fit(
-        rv$result,
-        measures = input$plot_measure,
-        include_non_partial = TRUE,
-        plot_type = input$plot_type
-      )
+      p <- fit_plot_obj()
       print(p)
     })
+
+    output$download_plot_png <- shiny::downloadHandler(
+      filename = function() {
+        paste0("mgcfa-fit-", as.character(input$plot_measure %||% "fit"), "-", format(Sys.Date(), "%Y%m%d"), ".png")
+      },
+      contentType = "image/png",
+      content = function(file) {
+        p <- fit_plot_obj()
+        if (is.null(p)) {
+          stop("Plot export requires package `ggplot2`.", call. = FALSE)
+        }
+        ggplot2::ggsave(filename = file, plot = p, width = 11, height = 6.5, dpi = 300)
+      }
+    )
   }
 
   shiny::shinyApp(ui = ui, server = server)
@@ -637,6 +802,63 @@ mgcfa_app <- function() {
   )
 }
 
+.mgcfa_app_step_id <- function(step) {
+  gsub("[^A-Za-z0-9]+", "_", as.character(step))
+}
+
+.mgcfa_app_step_rule_panel <- function(prefix, step) {
+  if (!requireNamespace("shiny", quietly = TRUE)) {
+    stop("Package `shiny` is required.", call. = FALSE)
+  }
+  sid <- .mgcfa_app_step_id(step)
+  id <- function(stem) paste0(prefix, "_step_", stem, "_", sid)
+  shiny::wellPanel(
+    shiny::h5(sprintf("Step Override: %s", step)),
+    shiny::checkboxInput(id("use"), "Use this step-specific override", value = FALSE),
+    shiny::selectInput(
+      id("criterion"),
+      "Criterion",
+      choices = c(
+        "chisq_pvalue",
+        "delta_cfi",
+        "aic_weight",
+        "bic_weight",
+        "aic_bic_weight",
+        "measure_change"
+      ),
+      selected = "chisq_pvalue"
+    ),
+    shiny::numericInput(id("threshold"), "Threshold (optional)", value = NA, step = 0.01),
+    shiny::textInput(
+      id("measure"),
+      "Fit measure (for measure_change)",
+      value = "aic",
+      placeholder = "e.g., aic, bic, cfi, tli, rmsea, srmr, chisq"
+    ),
+    shiny::selectInput(
+      id("direction"),
+      "Direction (for measure_change)",
+      choices = c("decrease", "increase"),
+      selected = "decrease"
+    ),
+    shiny::numericInput(
+      id("ic_bic_weight"),
+      "BIC weight (for aic_bic_weight)",
+      value = 0.50,
+      min = 0,
+      max = 1,
+      step = 0.05
+    ),
+    shiny::selectInput(
+      id("policy"),
+      "Policy for this step override",
+      choices = c("all", "majority", "any", "at_least"),
+      selected = "all"
+    ),
+    shiny::numericInput(id("min"), "Minimum passing rules (used by at_least)", value = 1, min = 1, step = 1)
+  )
+}
+
 .mgcfa_app_build_rules <- function(
   criteria,
   thresholds = NULL,
@@ -692,6 +914,60 @@ mgcfa_app <- function() {
     out[[i]] <- rule
   }
   out
+}
+
+.mgcfa_app_build_step_rule_overrides <- function(values, steps, prefix = c("failure", "search")) {
+  prefix <- match.arg(prefix)
+  steps <- as.character(steps %||% character())
+  if (length(steps) == 0L) {
+    return(list(rules_by_step = list(), policy_by_step = list(), min_by_step = list()))
+  }
+
+  read_val <- function(id, default = NULL) {
+    v <- values[[id]]
+    if (is.null(v)) {
+      return(default)
+    }
+    v
+  }
+
+  rules_by_step <- list()
+  policy_by_step <- list()
+  min_by_step <- list()
+
+  for (step in steps) {
+    sid <- .mgcfa_app_step_id(step)
+    use_id <- paste0(prefix, "_step_use_", sid)
+    if (!isTRUE(read_val(use_id, FALSE))) {
+      next
+    }
+
+    criterion <- as.character(read_val(paste0(prefix, "_step_criterion_", sid), "chisq_pvalue"))
+    threshold <- as.numeric(read_val(paste0(prefix, "_step_threshold_", sid), NA_real_))
+    measure <- as.character(read_val(paste0(prefix, "_step_measure_", sid), "aic"))
+    direction <- as.character(read_val(paste0(prefix, "_step_direction_", sid), "decrease"))
+    w <- as.numeric(read_val(paste0(prefix, "_step_ic_bic_weight_", sid), 0.5))
+    policy <- as.character(read_val(paste0(prefix, "_step_policy_", sid), "all"))
+    minv <- as.integer(read_val(paste0(prefix, "_step_min_", sid), NA_integer_))
+
+    rules_by_step[[step]] <- .mgcfa_app_build_rules(
+      criteria = criterion,
+      thresholds = threshold,
+      measures = measure,
+      directions = direction,
+      ic_bic_weights = w
+    )
+    policy_by_step[[step]] <- policy
+    if (identical(policy, "at_least") && !is.na(minv) && minv > 0L) {
+      min_by_step[[step]] <- minv
+    }
+  }
+
+  list(
+    rules_by_step = rules_by_step,
+    policy_by_step = policy_by_step,
+    min_by_step = min_by_step
+  )
 }
 
 .mgcfa_app_parse_criterion <- function(
@@ -780,4 +1056,167 @@ mgcfa_app <- function() {
     direction = NULL,
     ic_bic_weight = NULL
   )
+}
+
+.mgcfa_app_collect_measure_names <- function(args) {
+  out <- character()
+  if (identical(args$partial_failure_criterion %||% "", "measure_change")) {
+    out <- c(out, as.character(args$partial_failure_measure %||% ""))
+  }
+  if (identical(args$partial_search_criterion %||% "", "measure_change")) {
+    out <- c(out, as.character(args$partial_search_measure %||% ""))
+  }
+
+  collect_rule_measures <- function(rule_list) {
+    if (is.null(rule_list) || !is.list(rule_list) || length(rule_list) == 0L) {
+      return(character())
+    }
+    vals <- vapply(rule_list, function(r) {
+      if (!is.list(r)) {
+        return("")
+      }
+      if (!identical(as.character(r$criterion %||% ""), "measure_change")) {
+        return("")
+      }
+      as.character(r$measure %||% "")
+    }, character(1L))
+    vals[nzchar(vals)]
+  }
+
+  out <- c(out, collect_rule_measures(args$partial_failure_rules))
+  out <- c(out, collect_rule_measures(args$partial_search_rules))
+
+  for (lst in list(args$partial_failure_rules_by_step, args$partial_search_rules_by_step)) {
+    if (is.null(lst) || !is.list(lst) || length(lst) == 0L) {
+      next
+    }
+    for (step_rules in lst) {
+      out <- c(out, collect_rule_measures(step_rules))
+    }
+  }
+  out <- trimws(out)
+  unique(out[nzchar(out)])
+}
+
+.mgcfa_app_available_fit_measures <- local({
+  cache <- NULL
+  function() {
+    if (!is.null(cache)) {
+      return(cache)
+    }
+    if (!requireNamespace("lavaan", quietly = TRUE)) {
+      cache <<- character()
+      return(cache)
+    }
+    dat <- tryCatch(lavaan::HolzingerSwineford1939, error = function(e) NULL)
+    if (is.null(dat)) {
+      cache <<- character()
+      return(cache)
+    }
+    fit <- tryCatch(
+      lavaan::cfa("visual =~ x1 + x2 + x3", data = dat),
+      error = function(e) NULL
+    )
+    if (is.null(fit)) {
+      cache <<- character()
+      return(cache)
+    }
+    cache <<- unique(names(lavaan::fitMeasures(fit)))
+    cache
+  }
+})
+
+.mgcfa_app_validate_rule_policy <- function(rules, policy, min_pass, label) {
+  if (is.null(rules) || !is.list(rules) || length(rules) == 0L) {
+    return(invisible(NULL))
+  }
+  policy <- as.character(policy %||% "all")
+  if (!policy %in% c("all", "majority", "any", "at_least")) {
+    stop(sprintf("%s policy must be one of: all, majority, any, at_least.", label), call. = FALSE)
+  }
+  if (identical(policy, "at_least")) {
+    if (is.null(min_pass) || !is.finite(as.numeric(min_pass))) {
+      stop(sprintf("%s uses policy `at_least` but minimum passing rules is missing.", label), call. = FALSE)
+    }
+    min_pass <- as.integer(min_pass)
+    if (is.na(min_pass) || min_pass < 1L || min_pass > length(rules)) {
+      stop(sprintf(
+        "%s minimum passing rules must be between 1 and number of rules (%d).",
+        label, length(rules)
+      ), call. = FALSE)
+    }
+  }
+  invisible(NULL)
+}
+
+.mgcfa_app_validate_run_args <- function(args, allow_nonstandard_measures = FALSE) {
+  if (length(args$include_steps %||% character()) < 1L) {
+    stop("Select at least one invariance stage.", call. = FALSE)
+  }
+  w <- as.numeric(args$partial_ic_bic_weight %||% 0.5)
+  if (!is.finite(w) || w < 0 || w > 1) {
+    stop("BIC weight must be in [0, 1].", call. = FALSE)
+  }
+
+  .mgcfa_app_validate_rule_policy(
+    rules = args$partial_failure_rules %||% NULL,
+    policy = args$partial_failure_rule_policy %||% NULL,
+    min_pass = args$partial_failure_rule_min %||% NULL,
+    label = "Global failure rules"
+  )
+  .mgcfa_app_validate_rule_policy(
+    rules = args$partial_search_rules %||% NULL,
+    policy = args$partial_search_rule_policy %||% NULL,
+    min_pass = args$partial_search_rule_min %||% NULL,
+    label = "Global partial-search rules"
+  )
+
+  validate_step_bundle <- function(step_rules, step_policy, step_min, label) {
+    if (is.null(step_rules) || !is.list(step_rules) || length(step_rules) == 0L) {
+      return(invisible(NULL))
+    }
+    for (step in names(step_rules)) {
+      pol <- step_policy[[step]] %||% "all"
+      mn <- step_min[[step]] %||% NULL
+      .mgcfa_app_validate_rule_policy(
+        rules = step_rules[[step]],
+        policy = pol,
+        min_pass = mn,
+        label = sprintf("%s [%s]", label, step)
+      )
+    }
+    invisible(NULL)
+  }
+
+  validate_step_bundle(
+    step_rules = args$partial_failure_rules_by_step %||% NULL,
+    step_policy = args$partial_failure_rule_policy_by_step %||% list(),
+    step_min = args$partial_failure_rule_min_by_step %||% list(),
+    label = "Step failure rules"
+  )
+  validate_step_bundle(
+    step_rules = args$partial_search_rules_by_step %||% NULL,
+    step_policy = args$partial_search_rule_policy_by_step %||% list(),
+    step_min = args$partial_search_rule_min_by_step %||% list(),
+    label = "Step partial-search rules"
+  )
+
+  used_measures <- .mgcfa_app_collect_measure_names(args)
+  if (length(used_measures) == 0L || isTRUE(allow_nonstandard_measures)) {
+    return(invisible(TRUE))
+  }
+  known <- .mgcfa_app_available_fit_measures()
+  if (length(known) == 0L) {
+    return(invisible(TRUE))
+  }
+  unknown <- setdiff(used_measures, known)
+  if (length(unknown) > 0L) {
+    stop(
+      "Unknown fit-measure name(s): ",
+      paste(unknown, collapse = ", "),
+      ". Enable 'Allow non-standard fit-measure names' to bypass strict validation.",
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
 }

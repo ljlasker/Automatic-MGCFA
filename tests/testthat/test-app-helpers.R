@@ -103,3 +103,62 @@ test_that("app rule builder validates length mismatches", {
     "length 1 or match"
   )
 })
+
+test_that("step-specific override builder returns named step rule bundles", {
+  vals <- list(
+    failure_step_use_metric = TRUE,
+    failure_step_criterion_metric = "measure_change",
+    failure_step_threshold_metric = 0.01,
+    failure_step_measure_metric = "rmsea",
+    failure_step_direction_metric = "decrease",
+    failure_step_ic_bic_weight_metric = 0.5,
+    failure_step_policy_metric = "at_least",
+    failure_step_min_metric = 1,
+    failure_step_use_scalar = FALSE
+  )
+  out <- .mgcfa_app_build_step_rule_overrides(
+    values = vals,
+    steps = c("metric", "scalar"),
+    prefix = "failure"
+  )
+  expect_true("metric" %in% names(out$rules_by_step))
+  expect_false("scalar" %in% names(out$rules_by_step))
+  expect_identical(out$rules_by_step$metric[[1]]$criterion, "measure_change")
+  expect_identical(out$rules_by_step$metric[[1]]$measure, "rmsea")
+  expect_identical(out$policy_by_step$metric, "at_least")
+  expect_identical(unname(out$min_by_step$metric), 1L)
+})
+
+test_that("run-arg validation rejects unknown measure names when strict", {
+  args <- list(
+    include_steps = c("configural", "metric"),
+    partial_failure_criterion = "measure_change",
+    partial_failure_measure = "not_a_real_measure",
+    partial_search_criterion = "chisq_pvalue",
+    partial_ic_bic_weight = 0.5
+  )
+  expect_error(
+    .mgcfa_app_validate_run_args(args, allow_nonstandard_measures = FALSE),
+    "Unknown fit-measure name"
+  )
+  expect_true(isTRUE(.mgcfa_app_validate_run_args(args, allow_nonstandard_measures = TRUE)))
+})
+
+test_that("run-arg validation catches invalid at_least minima", {
+  args <- list(
+    include_steps = c("configural", "metric"),
+    partial_failure_criterion = "chisq_pvalue",
+    partial_search_criterion = "chisq_pvalue",
+    partial_ic_bic_weight = 0.5,
+    partial_failure_rules = list(
+      list(criterion = "chisq_pvalue", threshold = 0.05),
+      list(criterion = "delta_cfi", threshold = 0.01)
+    ),
+    partial_failure_rule_policy = "at_least",
+    partial_failure_rule_min = 3L
+  )
+  expect_error(
+    .mgcfa_app_validate_run_args(args, allow_nonstandard_measures = FALSE),
+    "between 1 and number of rules"
+  )
+})

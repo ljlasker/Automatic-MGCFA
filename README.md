@@ -42,7 +42,8 @@ The app supports failure/search criteria including `chisq_pvalue`,
 `aic`, `bic`, `cfi`, `tli`, `rmsea`, `srmr`, `chisq`, etc.).
 It also supports multi-rule decisions with policies (`all`, `majority`,
 `any`, `at_least`) for both stage-failure detection and automatic
-partial-search acceptance.
+partial-search acceptance, optional step-specific rule overrides by stage,
+and direct CSV/PNG exports of key result tables and fit plots.
 
 ## Quick Start
 
