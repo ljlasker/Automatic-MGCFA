@@ -162,3 +162,54 @@ test_that("run-arg validation catches invalid at_least minima", {
     "between 1 and number of rules"
   )
 })
+
+test_that("app run helper succeeds for raw and summary workflows", {
+  set.seed(42)
+  make_group <- function(n = 250L) {
+    eta <- rnorm(n)
+    lam <- c(0.80, 0.75, 0.70, 0.85, 0.78, 0.73)
+    err_sd <- sqrt(1 - lam^2)
+    y <- sapply(seq_along(lam), function(j) lam[j] * eta + rnorm(n, 0, err_sd[j]))
+    y <- as.data.frame(y)
+    names(y) <- paste0("x", seq_len(ncol(y)))
+    y
+  }
+  g1 <- make_group(250L)
+  g2 <- make_group(250L)
+  g1$grp <- "g1"
+  g2$grp <- "g2"
+  dat <- rbind(g1, g2)
+  dat$grp <- factor(dat$grp)
+
+  base_vals <- list(
+    model_type = "custom",
+    model_syntax = "F =~ x1 + x2 + x3 + x4 + x5 + x6",
+    include_steps = c("configural", "metric"),
+    partial_auto_search = "never",
+    stop_early = FALSE,
+    partial_failure_criterion = "chisq_pvalue",
+    partial_failure_threshold = 0.05,
+    partial_search_criterion = "chisq_pvalue",
+    partial_search_threshold = 0.05,
+    partial_ic_bic_weight = 0.5,
+    allow_nonstandard_measures = FALSE
+  )
+
+  raw_vals <- c(base_vals, list(data_mode = "raw", group_var = "grp"))
+  raw_out <- .mgcfa_app_run_once(raw_vals, raw_data = dat)
+  expect_s3_class(raw_out$fit, "mgcfa_result")
+  expect_true(is.data.frame(raw_out$report$overview))
+
+  sum_obj <- mgcfa_make_summary(
+    data = dat,
+    group = "grp",
+    variables = paste0("x", 1:6),
+    summary_profile = "raw_equivalent"
+  )
+  sum_args <- .mgcfa_app_unpack_summary_input(sum_obj)
+  sum_vals <- c(base_vals, list(data_mode = "summary"))
+  sum_out <- .mgcfa_app_run_once(sum_vals, summary_args = sum_args)
+  expect_s3_class(sum_out$fit, "mgcfa_result")
+  expect_true(is.data.frame(sum_out$report$overview))
+  expect_equal(names(raw_out$fit$fits), names(sum_out$fit$fits))
+})
