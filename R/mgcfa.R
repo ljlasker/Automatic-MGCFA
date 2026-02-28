@@ -286,6 +286,12 @@ mgcfa_make_summary <- function(
 #'   \code{"at_least"}.
 #' @param partial_failure_rule_min Minimum number of passing rules required when
 #'   \code{partial_failure_rule_policy = "at_least"}.
+#' @param partial_failure_rules_by_step Optional named list of step-specific
+#'   multi-rule definitions overriding \code{partial_failure_rules}.
+#' @param partial_failure_rule_policy_by_step Optional named vector/list of
+#'   step-specific aggregation policies for failure decisions.
+#' @param partial_failure_rule_min_by_step Optional named vector/list of
+#'   step-specific minimum pass counts for failure decisions.
 #' @param partial_auto_search Behavior when a constrained step fails:
 #'   \code{"prompt"}, \code{"never"}, or \code{"always"}.
 #' @param partial_search_criterion Criterion used during automatic partial
@@ -321,6 +327,12 @@ mgcfa_make_summary <- function(
 #'   \code{"at_least"}.
 #' @param partial_search_rule_min Minimum number of passing rules required when
 #'   \code{partial_search_rule_policy = "at_least"}.
+#' @param partial_search_rules_by_step Optional named list of step-specific
+#'   multi-rule definitions overriding \code{partial_search_rules}.
+#' @param partial_search_rule_policy_by_step Optional named vector/list of
+#'   step-specific aggregation policies for partial-search decisions.
+#' @param partial_search_rule_min_by_step Optional named vector/list of
+#'   step-specific minimum pass counts for partial-search decisions.
 #' @param partial_search_candidate_source Candidate release-term source.
 #'   \code{"score"} uses only score-test releasable constraints,
 #'   \code{"all"} uses all releasable equality terms detected for the step,
@@ -332,6 +344,10 @@ mgcfa_make_summary <- function(
 #'   "residual.covariances", "regressions", "means")}.
 #' @param partial_search_max_models Maximum number of candidate models evaluated
 #'   during automatic partial search for a step.
+#' @param partial_search_parallel Logical; if \code{TRUE}, evaluate partial
+#'   candidates in parallel where supported.
+#' @param partial_search_n_cores Number of worker cores used when
+#'   \code{partial_search_parallel = TRUE}.
 #' @param partial_search_allow_full_release Logical; if \code{TRUE}, allow
 #'   candidate models that free all step-specific equality constraints. These
 #'   candidates are flagged as \code{stage_reached = FALSE}. Whether they are
@@ -352,6 +368,8 @@ mgcfa_make_summary <- function(
 #' @param stop_at_first_unacceptable Logical; if \code{TRUE}, stop fitting
 #'   higher invariance stages after the first constrained stage that remains
 #'   unacceptable relative to the previous fitted stage.
+#' @param not_applicable_action Action when a requested stage has no releasable
+#'   constraints (\code{"skip"}, \code{"warn"}, or \code{"error"}).
 #'
 #' @return An object of class \code{"mgcfa_result"}.
 #' @export
@@ -385,6 +403,9 @@ mgcfa_auto <- function(
   partial_failure_rules = NULL,
   partial_failure_rule_policy = c("all", "majority", "any", "at_least"),
   partial_failure_rule_min = NULL,
+  partial_failure_rules_by_step = NULL,
+  partial_failure_rule_policy_by_step = NULL,
+  partial_failure_rule_min_by_step = NULL,
   partial_auto_search = c("prompt", "never", "always"),
   partial_search_criterion = NULL,
   partial_search_threshold = NULL,
@@ -399,13 +420,19 @@ mgcfa_auto <- function(
   partial_search_rules = NULL,
   partial_search_rule_policy = c("all", "majority", "any", "at_least"),
   partial_search_rule_min = NULL,
+  partial_search_rules_by_step = NULL,
+  partial_search_rule_policy_by_step = NULL,
+  partial_search_rule_min_by_step = NULL,
   partial_search_candidate_source = c("auto", "score", "all"),
   partial_search_exhaustive_steps = c("lv.variances", "lv.covariances", "residual.covariances", "regressions", "means"),
   partial_search_max_models = 5000L,
+  partial_search_parallel = FALSE,
+  partial_search_n_cores = 2L,
   partial_search_allow_full_release = FALSE,
   partial_search_full_release_action = c("exploratory", "eligible"),
   means_constrain_lv_variances = TRUE,
-  stop_at_first_unacceptable = TRUE
+  stop_at_first_unacceptable = TRUE,
+  not_applicable_action = c("skip", "warn", "error")
 ) {
   if (!requireNamespace("lavaan", quietly = TRUE)) {
     stop("Package `lavaan` is required for MGCFA.", call. = FALSE)
@@ -426,6 +453,7 @@ mgcfa_auto <- function(
   partial_search_rule_policy <- match.arg(partial_search_rule_policy, choices = c("all", "majority", "any", "at_least"))
   partial_search_candidate_source <- match.arg(partial_search_candidate_source, choices = c("auto", "score", "all"))
   partial_search_full_release_action <- match.arg(partial_search_full_release_action, choices = c("exploratory", "eligible"))
+  not_applicable_action <- match.arg(not_applicable_action, choices = c("skip", "warn", "error"))
 
   if (!is.null(partial_search_criterion)) {
     partial_search_criterion <- match.arg(
@@ -500,11 +528,24 @@ mgcfa_auto <- function(
       stop("`partial_failure_rule_min` must be NULL or a positive integer.", call. = FALSE)
     }
   }
+  partial_failure_rules_by_step <- .mgcfa_as_named_list(partial_failure_rules_by_step, "partial_failure_rules_by_step")
+  partial_failure_rule_policy_by_step <- .mgcfa_as_named_list(partial_failure_rule_policy_by_step, "partial_failure_rule_policy_by_step")
+  partial_failure_rule_min_by_step <- .mgcfa_as_named_list(partial_failure_rule_min_by_step, "partial_failure_rule_min_by_step")
   if (!is.null(partial_search_rule_min)) {
     partial_search_rule_min <- as.integer(partial_search_rule_min)
     if (is.na(partial_search_rule_min) || partial_search_rule_min < 1L) {
       stop("`partial_search_rule_min` must be NULL or a positive integer.", call. = FALSE)
     }
+  }
+  partial_search_rules_by_step <- .mgcfa_as_named_list(partial_search_rules_by_step, "partial_search_rules_by_step")
+  partial_search_rule_policy_by_step <- .mgcfa_as_named_list(partial_search_rule_policy_by_step, "partial_search_rule_policy_by_step")
+  partial_search_rule_min_by_step <- .mgcfa_as_named_list(partial_search_rule_min_by_step, "partial_search_rule_min_by_step")
+  if (!is.logical(partial_search_parallel) || length(partial_search_parallel) != 1L || is.na(partial_search_parallel)) {
+    stop("`partial_search_parallel` must be TRUE or FALSE.", call. = FALSE)
+  }
+  partial_search_n_cores <- as.integer(partial_search_n_cores)
+  if (is.na(partial_search_n_cores) || partial_search_n_cores < 1L) {
+    stop("`partial_search_n_cores` must be a positive integer.", call. = FALSE)
   }
   if (!is.logical(means_constrain_lv_variances) ||
       length(means_constrain_lv_variances) != 1L ||
@@ -618,8 +659,9 @@ mgcfa_auto <- function(
   post_strict_steps <- c("lv.variances", "lv.covariances", "residual.covariances", "regressions", "means")
   step_geq_used <- list()
 
-  failure_eval_enabled <- !is.null(partial_failure_rules) || partial_failure_criterion != "none"
-  failure_rule_set <- .mgcfa_resolve_rule_set(
+  failure_eval_enabled <- !is.null(partial_failure_rules) || partial_failure_criterion != "none" ||
+    !is.null(partial_failure_rules_by_step)
+  default_failure_rule_set <- .mgcfa_resolve_rule_set(
     rules = partial_failure_rules,
     criterion = if (partial_failure_criterion == "none") "chisq_pvalue" else partial_failure_criterion,
     threshold = partial_failure_threshold,
@@ -627,13 +669,6 @@ mgcfa_auto <- function(
     direction = partial_failure_direction,
     ic_bic_weight = partial_ic_bic_weight
   )
-  failure_criterion_label <- if (length(failure_rule_set) > 1L) "multi_rule" else failure_rule_set[[1L]]$criterion
-  failure_threshold_display <- if (length(failure_rule_set) > 1L) {
-    as.numeric(.mgcfa_required_passes(length(failure_rule_set), policy = partial_failure_rule_policy, min_pass = partial_failure_rule_min) / length(failure_rule_set))
-  } else {
-    as.numeric(failure_rule_set[[1L]]$threshold)
-  }
-
   search_has_single_overrides <- !is.null(partial_search_criterion) ||
     !is.null(partial_search_threshold) ||
     !is.null(partial_search_measure) ||
@@ -648,7 +683,7 @@ mgcfa_auto <- function(
       ic_bic_weight = partial_ic_bic_weight
     )
   } else if (!is.null(partial_failure_rules) && !isTRUE(search_has_single_overrides)) {
-    failure_rule_set
+    default_failure_rule_set
   } else {
     .mgcfa_resolve_rule_set(
       rules = NULL,
@@ -659,13 +694,6 @@ mgcfa_auto <- function(
       ic_bic_weight = partial_ic_bic_weight
     )
   }
-  search_criterion_label <- if (length(default_search_rules) > 1L) "multi_rule" else default_search_rules[[1L]]$criterion
-  search_threshold_display <- if (length(default_search_rules) > 1L) {
-    as.numeric(.mgcfa_required_passes(length(default_search_rules), policy = partial_search_rule_policy, min_pass = partial_search_rule_min) / length(default_search_rules))
-  } else {
-    as.numeric(default_search_rules[[1L]]$threshold)
-  }
-
   fits <- list()
   step_failures <- list()
   not_applicable_steps <- list()
@@ -683,6 +711,42 @@ mgcfa_auto <- function(
   for (i in seq_along(include_steps)) {
     step <- include_steps[[i]]
     prev_step <- if (i > 1L) include_steps[[i - 1L]] else NULL
+    step_failure_cfg <- .mgcfa_step_rule_bundle(
+      step = step,
+      default_rules = default_failure_rule_set,
+      default_policy = partial_failure_rule_policy,
+      default_min = partial_failure_rule_min,
+      rules_by_step = partial_failure_rules_by_step,
+      policy_by_step = partial_failure_rule_policy_by_step,
+      min_by_step = partial_failure_rule_min_by_step
+    )
+    failure_rule_set <- step_failure_cfg$rules
+    failure_rule_policy_step <- step_failure_cfg$policy
+    failure_rule_min_step <- step_failure_cfg$min_pass
+    failure_criterion_label <- if (length(failure_rule_set) > 1L) "multi_rule" else failure_rule_set[[1L]]$criterion
+    failure_threshold_display <- if (length(failure_rule_set) > 1L) {
+      as.numeric(.mgcfa_required_passes(length(failure_rule_set), policy = failure_rule_policy_step, min_pass = failure_rule_min_step) / length(failure_rule_set))
+    } else {
+      as.numeric(failure_rule_set[[1L]]$threshold)
+    }
+    step_search_cfg <- .mgcfa_step_rule_bundle(
+      step = step,
+      default_rules = default_search_rules,
+      default_policy = partial_search_rule_policy,
+      default_min = partial_search_rule_min,
+      rules_by_step = partial_search_rules_by_step,
+      policy_by_step = partial_search_rule_policy_by_step,
+      min_by_step = partial_search_rule_min_by_step
+    )
+    search_rules_step <- step_search_cfg$rules
+    search_rule_policy_step <- step_search_cfg$policy
+    search_rule_min_step <- step_search_cfg$min_pass
+    search_criterion_label <- if (length(search_rules_step) > 1L) "multi_rule" else search_rules_step[[1L]]$criterion
+    search_threshold_display <- if (length(search_rules_step) > 1L) {
+      as.numeric(.mgcfa_required_passes(length(search_rules_step), policy = search_rule_policy_step, min_pass = search_rule_min_step) / length(search_rules_step))
+    } else {
+      as.numeric(search_rules_step[[1L]]$threshold)
+    }
     eval_prev_step <- prev_step
     step_anchor <- "strict"
     if (step %in% post_strict_steps) {
@@ -779,6 +843,12 @@ mgcfa_auto <- function(
       )
       step_failures[[step]] <- fail_info
       not_applicable_steps[[step]] <- fail_info
+      if (identical(not_applicable_action, "warn")) {
+        warning(fail_info$reason, call. = FALSE)
+      }
+      if (identical(not_applicable_action, "error")) {
+        stop(fail_info$reason, call. = FALSE)
+      }
       next
     }
 
@@ -832,7 +902,7 @@ mgcfa_auto <- function(
           failed_fit = NULL,
           failed_fit_measures = NULL,
           details = list(
-            policy = partial_failure_rule_policy,
+            policy = failure_rule_policy_step,
             rules = failure_rule_set
           )
         )
@@ -866,9 +936,9 @@ mgcfa_auto <- function(
             orthogonal = isTRUE(orthogonal),
             previous_fit = prev_fit,
             base_partial = step_partial,
-            rule_set = default_search_rules,
-            rule_policy = partial_search_rule_policy,
-            rule_min = partial_search_rule_min,
+            rule_set = search_rules_step,
+            rule_policy = search_rule_policy_step,
+            rule_min = search_rule_min_step,
             max_free = partial_search_max_free,
             top_n = partial_search_top_n,
             stop_on_accept = step_stop_on_accept,
@@ -876,6 +946,8 @@ mgcfa_auto <- function(
             use_best_if_no_pass = isTRUE(partial_search_use_best_if_no_pass),
             candidate_source = step_candidate_source,
             max_models = partial_search_max_models,
+            use_parallel = isTRUE(partial_search_parallel),
+            n_cores = partial_search_n_cores,
             allow_full_release = isTRUE(partial_search_allow_full_release),
             full_release_action = partial_search_full_release_action,
             fit_measures = fit_measures
@@ -902,8 +974,8 @@ mgcfa_auto <- function(
             decision = if (partial_auto_search == "prompt" && interactive()) "declined" else "not_requested",
             criterion = search_criterion_label,
             threshold = search_threshold_display,
-            rule_policy = partial_search_rule_policy,
-            rules = default_search_rules,
+            rule_policy = search_rule_policy_step,
+            rules = search_rules_step,
             candidates = data.frame(),
             top_models = data.frame(),
             selected_partial = character(),
@@ -963,8 +1035,8 @@ mgcfa_auto <- function(
         previous_fit = prev_fit,
         candidate_fit = fit_or_error,
         rules = failure_rule_set,
-        policy = partial_failure_rule_policy,
-        min_pass = partial_failure_rule_min
+        policy = failure_rule_policy_step,
+        min_pass = failure_rule_min_step
       )
 
       fail_info <- list(
@@ -1015,9 +1087,9 @@ mgcfa_auto <- function(
             orthogonal = isTRUE(orthogonal),
             previous_fit = prev_fit,
             base_partial = step_partial,
-            rule_set = default_search_rules,
-            rule_policy = partial_search_rule_policy,
-            rule_min = partial_search_rule_min,
+            rule_set = search_rules_step,
+            rule_policy = search_rule_policy_step,
+            rule_min = search_rule_min_step,
             max_free = partial_search_max_free,
             top_n = partial_search_top_n,
             stop_on_accept = step_stop_on_accept,
@@ -1025,6 +1097,8 @@ mgcfa_auto <- function(
             use_best_if_no_pass = isTRUE(partial_search_use_best_if_no_pass),
             candidate_source = step_candidate_source,
             max_models = partial_search_max_models,
+            use_parallel = isTRUE(partial_search_parallel),
+            n_cores = partial_search_n_cores,
             allow_full_release = isTRUE(partial_search_allow_full_release),
             full_release_action = partial_search_full_release_action,
             fit_measures = fit_measures
@@ -1054,8 +1128,8 @@ mgcfa_auto <- function(
             decision = if (partial_auto_search == "prompt" && interactive()) "declined" else "not_requested",
             criterion = search_criterion_label,
             threshold = search_threshold_display,
-            rule_policy = partial_search_rule_policy,
-            rules = default_search_rules,
+            rule_policy = search_rule_policy_step,
+            rules = search_rules_step,
             candidates = data.frame(),
             top_models = data.frame(),
             selected_partial = character(),
@@ -1110,6 +1184,19 @@ mgcfa_auto <- function(
 
   lrt_table <- .mgcfa_nested_lrt(fits)
   failed_step_outputs <- Filter(function(z) isTRUE(z$failed), step_failures)
+  practical_change_table <- .mgcfa_practical_change_table(fits)
+  decision_trace <- .mgcfa_build_decision_trace(
+    fits = fits,
+    step_failures = step_failures,
+    partial_searches = partial_searches,
+    recovered_steps = recovered_steps,
+    not_applicable_steps = not_applicable_steps
+  )
+  metadata <- .mgcfa_run_metadata(
+    call = match.call(),
+    include_steps = include_steps,
+    fit_measures = fit_measures
+  )
 
   out <- list(
     call = match.call(),
@@ -1128,6 +1215,9 @@ mgcfa_auto <- function(
     partial_search = partial_search,
     recovered_partial = recovered_partial,
     not_applicable_steps = not_applicable_steps,
+    decision_trace = decision_trace,
+    practical_change_table = practical_change_table,
+    metadata = metadata,
     stopped_early = stopped_early,
     stopped_after_step = stopped_after_step,
     stopped_reason = stopped_reason
@@ -1204,6 +1294,16 @@ print.mgcfa_result <- function(
       lrt_tbl <- .mgcfa_format_numeric_df(lrt_tbl, digits = digits, rounding = rounding)
     }
     print(lrt_tbl, row.names = FALSE)
+  }
+
+  if (!is.null(x$practical_change_table) && nrow(x$practical_change_table) > 0L) {
+    cat("\nPractical fit changes by step\n")
+    pc_tbl <- .mgcfa_format_numeric_df(
+      x$practical_change_table,
+      digits = digits,
+      rounding = rounding
+    )
+    print(pc_tbl, row.names = FALSE)
   }
 
   if (!is.null(x$step_failures) && length(x$step_failures) > 0L) {
@@ -1633,6 +1733,282 @@ mgcfa_plot_fit <- function(
   p
 }
 
+#' Compute Bias Effect Sizes from Partial Invariance Recovery
+#'
+#' Produces signed bias-effect contrasts (dMACS-style deltas) by comparing the
+#' failed non-partial model at each recovered step to the selected bias-adjusted
+#' model. Supports observed item/composite outcomes and latent mean/SD
+#' comparisons, with optional decomposition by freed parameter class.
+#'
+#' @param x An object returned by \code{mgcfa_auto()}.
+#' @param steps Optional character vector of recovered steps to summarize.
+#'   Defaults to all steps with both failed non-partial and selected recovered
+#'   models.
+#' @param groups Optional length-2 vector indicating reference and focal groups
+#'   (labels or indices). Defaults to the first two groups.
+#' @param composites Optional named list defining observed composites. Each
+#'   element may be (a) a character vector of observed variable names (equal
+#'   weights) or (b) a named numeric vector of weights.
+#' @param include_items Logical; if \code{TRUE}, include one-item composites for
+#'   each observed indicator.
+#' @param include_class_decomposition Logical; if \code{TRUE}, also estimates
+#'   class-specific bias effects by refitting the failed model with only the
+#'   freed terms from each parameter class.
+#' @param digits Number of digits used for numeric formatting.
+#' @param rounding Numeric rounding mode. One of \code{"signif"},
+#'   \code{"round"}, or \code{"none"}.
+#'
+#' @return An object of class \code{"mgcfa_bias_effects"} containing summary
+#'   tables for observed and latent bias effects.
+#' @export
+mgcfa_bias_effects <- function(
+  x,
+  steps = NULL,
+  groups = NULL,
+  composites = NULL,
+  include_items = TRUE,
+  include_class_decomposition = TRUE,
+  digits = 3L,
+  rounding = c("signif", "round", "none")
+) {
+  x <- .mgcfa_as_result(x)
+  rounding <- match.arg(rounding)
+  if (!is.logical(include_items) || length(include_items) != 1L || is.na(include_items)) {
+    stop("`include_items` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(include_class_decomposition) || length(include_class_decomposition) != 1L || is.na(include_class_decomposition)) {
+    stop("`include_class_decomposition` must be TRUE or FALSE.", call. = FALSE)
+  }
+
+  fit_steps <- names(x$fits)
+  candidate_steps <- Filter(function(step) {
+    sf <- (x$step_failures %||% list())[[step]] %||% NULL
+    ps <- (x$partial_searches %||% list())[[step]] %||% NULL
+    has_failed <- !is.null(sf) && !is.null(sf$failed_fit)
+    has_selected <- !is.null((x$fits %||% list())[[step]])
+    has_freed <- length(unique(c(
+      .mgcfa_normalize_terms(ps$selected_added_terms %||% character()),
+      .mgcfa_normalize_terms((x$freed_parameters %||% list())[[step]] %||% character())
+    ))) > 0L
+    isTRUE(has_failed && has_selected && has_freed)
+  }, fit_steps)
+  candidate_steps <- as.character(candidate_steps)
+  if (length(candidate_steps) == 0L) {
+    stop(
+      "No recovered partial-invariance steps with both failed and adjusted models were found in `x`.",
+      call. = FALSE
+    )
+  }
+
+  if (is.null(steps)) {
+    steps <- candidate_steps
+  } else {
+    steps <- unique(as.character(steps))
+    bad <- setdiff(steps, candidate_steps)
+    if (length(bad) > 0L) {
+      stop(
+        "Requested `steps` are not available for bias effect computation: ",
+        paste(bad, collapse = ", "),
+        call. = FALSE
+      )
+    }
+  }
+
+  observed_tables <- list()
+  observed_stats_tables <- list()
+  latent_tables <- list()
+  latent_stats_tables <- list()
+  class_tables <- list()
+  freed_rows <- list()
+
+  for (step in steps) {
+    sf <- x$step_failures[[step]]
+    ps <- (x$partial_searches %||% list())[[step]] %||% list()
+    failed_fit <- sf$failed_fit
+    adjusted_fit <- x$fits[[step]]
+    if (is.null(failed_fit) || is.null(adjusted_fit)) {
+      next
+    }
+
+    group_pair <- .mgcfa_resolve_group_pair(failed_fit, groups = groups)
+    comp_weights <- .mgcfa_prepare_composites(
+      fit = failed_fit,
+      composites = composites,
+      include_items = isTRUE(include_items)
+    )
+
+    obs_biased <- .mgcfa_model_observed_stats(
+      fit = failed_fit,
+      weights = comp_weights,
+      model_label = "Biased (Non-Partial)"
+    )
+    obs_adjusted <- .mgcfa_model_observed_stats(
+      fit = adjusted_fit,
+      weights = comp_weights,
+      model_label = "Bias-Adjusted (Selected)"
+    )
+    obs_cmp <- .mgcfa_observed_bias_delta(
+      biased_stats = obs_biased,
+      adjusted_stats = obs_adjusted,
+      ref_group = group_pair$reference,
+      focal_group = group_pair$focal,
+      step = step
+    )
+    observed_tables[[step]] <- obs_cmp
+    observed_stats_tables[[step]] <- rbind(
+      transform(obs_biased, step = step, stringsAsFactors = FALSE),
+      transform(obs_adjusted, step = step, stringsAsFactors = FALSE)
+    )
+
+    latent_biased <- .mgcfa_model_latent_stats(
+      fit = failed_fit,
+      model_label = "Biased (Non-Partial)"
+    )
+    latent_adjusted <- .mgcfa_model_latent_stats(
+      fit = adjusted_fit,
+      model_label = "Bias-Adjusted (Selected)"
+    )
+    latent_cmp <- .mgcfa_latent_bias_delta(
+      biased_stats = latent_biased,
+      adjusted_stats = latent_adjusted,
+      ref_group = group_pair$reference,
+      focal_group = group_pair$focal,
+      step = step
+    )
+    latent_tables[[step]] <- latent_cmp
+    latent_stats_tables[[step]] <- rbind(
+      transform(latent_biased, step = step, stringsAsFactors = FALSE),
+      transform(latent_adjusted, step = step, stringsAsFactors = FALSE)
+    )
+
+    selected_added <- .mgcfa_normalize_terms(
+      ps$selected_added_terms %||% ((x$freed_parameters %||% list())[[step]] %||% character())
+    )
+    selected_partial <- .mgcfa_normalize_terms(ps$selected_partial %||% character())
+    base_partial <- setdiff(selected_partial, selected_added)
+    term_classes <- .mgcfa_term_classes(adjusted_fit, selected_added)
+
+    if (length(selected_added) > 0L) {
+      freed_rows[[step]] <- data.frame(
+        step = step,
+        term = selected_added,
+        class = unname(term_classes[selected_added]),
+        stringsAsFactors = FALSE
+      )
+    }
+
+    if (isTRUE(include_class_decomposition) && length(selected_added) > 0L) {
+      cls <- unique(unname(term_classes[selected_added]))
+      cls <- cls[nzchar(cls)]
+      step_class_rows <- list()
+      for (cls_i in cls) {
+        cls_terms <- names(term_classes)[term_classes == cls_i]
+        cls_terms <- intersect(cls_terms, selected_added)
+        if (length(cls_terms) == 0L) {
+          next
+        }
+        fit_cls <- .mgcfa_refit_with_group_partial(
+          base_fit = failed_fit,
+          group_partial_terms = unique(c(base_partial, cls_terms))
+        )
+        if (is.null(fit_cls)) {
+          next
+        }
+        obs_cls <- .mgcfa_model_observed_stats(
+          fit = fit_cls,
+          weights = comp_weights,
+          model_label = paste0("Class Partial: ", cls_i)
+        )
+        cls_cmp <- .mgcfa_observed_delta_against_biased(
+          biased_stats = obs_biased,
+          compare_stats = obs_cls,
+          ref_group = group_pair$reference,
+          focal_group = group_pair$focal,
+          step = step,
+          class_label = cls_i
+        )
+        if (!is.null(cls_cmp) && nrow(cls_cmp) > 0L) {
+          cls_cmp$freed_terms <- paste(cls_terms, collapse = ", ")
+          step_class_rows[[length(step_class_rows) + 1L]] <- cls_cmp
+        }
+      }
+      if (length(step_class_rows) > 0L) {
+        class_tables[[step]] <- do.call(rbind, step_class_rows)
+      }
+    }
+  }
+
+  observed_effects <- if (length(observed_tables) > 0L) do.call(rbind, observed_tables) else data.frame()
+  observed_group_stats <- if (length(observed_stats_tables) > 0L) do.call(rbind, observed_stats_tables) else data.frame()
+  latent_effects <- if (length(latent_tables) > 0L) do.call(rbind, latent_tables) else data.frame()
+  latent_group_stats <- if (length(latent_stats_tables) > 0L) do.call(rbind, latent_stats_tables) else data.frame()
+  class_effects <- if (length(class_tables) > 0L) do.call(rbind, class_tables) else data.frame()
+  freed_parameters <- if (length(freed_rows) > 0L) do.call(rbind, freed_rows) else data.frame()
+
+  if (nrow(observed_effects) > 0L) {
+    observed_effects <- .mgcfa_format_numeric_df(observed_effects, digits = digits, rounding = rounding)
+  }
+  if (nrow(observed_group_stats) > 0L) {
+    observed_group_stats <- .mgcfa_format_numeric_df(observed_group_stats, digits = digits, rounding = rounding)
+  }
+  if (nrow(latent_effects) > 0L) {
+    latent_effects <- .mgcfa_format_numeric_df(latent_effects, digits = digits, rounding = rounding)
+  }
+  if (nrow(latent_group_stats) > 0L) {
+    latent_group_stats <- .mgcfa_format_numeric_df(latent_group_stats, digits = digits, rounding = rounding)
+  }
+  if (nrow(class_effects) > 0L) {
+    class_effects <- .mgcfa_format_numeric_df(class_effects, digits = digits, rounding = rounding)
+  }
+
+  out <- list(
+    steps = steps,
+    groups = if (exists("group_pair")) c(group_pair$reference, group_pair$focal) else NULL,
+    observed_effects = observed_effects,
+    observed_group_stats = observed_group_stats,
+    latent_effects = latent_effects,
+    latent_group_stats = latent_group_stats,
+    class_effects = class_effects,
+    freed_parameters = freed_parameters
+  )
+  class(out) <- "mgcfa_bias_effects"
+  out
+}
+
+#' Print Method for Bias Effect Summaries
+#'
+#' @param x An object returned by \code{mgcfa_bias_effects()}.
+#' @param ... Unused.
+#'
+#' @return The input object invisibly.
+#' @export
+print.mgcfa_bias_effects <- function(x, ...) {
+  if (!inherits(x, "mgcfa_bias_effects")) {
+    stop("`x` must be an object returned by `mgcfa_bias_effects()`.", call. = FALSE)
+  }
+  cat("Steps:", paste(x$steps, collapse = ", "), "\n")
+  if (!is.null(x$groups) && length(x$groups) == 2L) {
+    cat("Comparison:", x$groups[[2L]], "vs", x$groups[[1L]], "\n")
+  }
+  if (!is.null(x$observed_effects) && nrow(x$observed_effects) > 0L) {
+    cat("\nObserved bias effects (signed dMACS-style deltas)\n")
+    print(utils::head(x$observed_effects, n = 12L), row.names = FALSE)
+  }
+  if (!is.null(x$latent_effects) && nrow(x$latent_effects) > 0L) {
+    cat("\nLatent mean/SD comparisons (biased vs adjusted)\n")
+    print(utils::head(x$latent_effects, n = 12L), row.names = FALSE)
+  }
+  if (!is.null(x$latent_group_stats) && nrow(x$latent_group_stats) > 0L) {
+    cat("\nLatent group and pooled means/SDs\n")
+    print(utils::head(x$latent_group_stats, n = 12L), row.names = FALSE)
+  }
+  if (!is.null(x$class_effects) && nrow(x$class_effects) > 0L) {
+    cat("\nClass decomposition of observed bias effects\n")
+    print(utils::head(x$class_effects, n = 12L), row.names = FALSE)
+  }
+  invisible(x)
+}
+
 .mgcfa_step_overview <- function(x) {
   if (!inherits(x, "mgcfa_result") || is.null(x$fits) || length(x$fits) == 0L) {
     return(data.frame())
@@ -1667,6 +2043,401 @@ mgcfa_plot_fit <- function(
     )
   }
   do.call(rbind, out)
+}
+
+.mgcfa_resolve_group_pair <- function(fit, groups = NULL) {
+  gl <- tryCatch(lavaan::lavInspect(fit, "group.label"), error = function(e) NULL)
+  if (is.null(gl) || length(gl) < 2L) {
+    stop("Bias effects require at least two groups.", call. = FALSE)
+  }
+  gl <- as.character(gl)
+  if (is.null(groups)) {
+    return(list(reference = gl[[1L]], focal = gl[[2L]]))
+  }
+  groups <- unlist(groups, use.names = FALSE)
+  if (length(groups) != 2L) {
+    stop("`groups` must be NULL or length 2 (reference, focal).", call. = FALSE)
+  }
+  if (is.numeric(groups)) {
+    idx <- as.integer(groups)
+    if (any(is.na(idx)) || any(idx < 1L) || any(idx > length(gl))) {
+      stop("Numeric `groups` indices are out of range.", call. = FALSE)
+    }
+    return(list(reference = gl[[idx[[1L]]]], focal = gl[[idx[[2L]]]]))
+  }
+  groups <- as.character(groups)
+  if (!all(groups %in% gl)) {
+    stop("Character `groups` must match lavaan group labels.", call. = FALSE)
+  }
+  list(reference = groups[[1L]], focal = groups[[2L]])
+}
+
+.mgcfa_prepare_composites <- function(fit, composites = NULL, include_items = TRUE) {
+  ov <- tryCatch(lavaan::lavNames(fit, "ov"), error = function(e) character())
+  if (length(ov) == 0L) {
+    stop("No observed variables were found in the fitted model.", call. = FALSE)
+  }
+  empty_w <- stats::setNames(rep(0, length(ov)), ov)
+  out <- list()
+
+  if (is.null(composites)) {
+    out[["Observed Composite"]] <- stats::setNames(rep(1 / length(ov), length(ov)), ov)
+  } else {
+    if (!is.list(composites) || length(composites) == 0L) {
+      stop("`composites` must be NULL or a non-empty named list.", call. = FALSE)
+    }
+    if (is.null(names(composites)) || any(!nzchar(names(composites)))) {
+      stop("`composites` must be a named list.", call. = FALSE)
+    }
+    for (nm in names(composites)) {
+      def <- composites[[nm]]
+      w <- empty_w
+      if (is.character(def)) {
+        vars <- unique(as.character(def))
+        if (!all(vars %in% ov)) {
+          stop(sprintf("Composite `%s` includes variables not in the model.", nm), call. = FALSE)
+        }
+        w[vars] <- 1 / length(vars)
+      } else if (is.numeric(def) && !is.null(names(def))) {
+        vars <- names(def)
+        if (!all(vars %in% ov)) {
+          stop(sprintf("Composite `%s` includes weight names not in the model.", nm), call. = FALSE)
+        }
+        w[vars] <- as.numeric(def)
+      } else {
+        stop(sprintf(
+          "Composite `%s` must be a character vector of variable names or a named numeric weight vector.",
+          nm
+        ), call. = FALSE)
+      }
+      out[[nm]] <- w
+    }
+  }
+
+  if (isTRUE(include_items)) {
+    for (v in ov) {
+      w <- empty_w
+      w[[v]] <- 1
+      out[[paste0("Item: ", v)]] <- w
+    }
+  }
+  out
+}
+
+.mgcfa_model_observed_stats <- function(fit, weights, model_label) {
+  implied <- tryCatch(lavaan::lavInspect(fit, "implied"), error = function(e) NULL)
+  gl <- tryCatch(lavaan::lavInspect(fit, "group.label"), error = function(e) NULL)
+  nobs <- tryCatch(as.numeric(lavaan::lavInspect(fit, "nobs")), error = function(e) NULL)
+  if (is.null(implied) || is.null(gl) || length(gl) < 1L) {
+    return(data.frame())
+  }
+  if (!is.list(implied)) {
+    return(data.frame())
+  }
+  gl <- as.character(gl)
+  n_g <- length(gl)
+  if (is.null(nobs) || length(nobs) != n_g || any(!is.finite(nobs))) {
+    nobs <- rep(1, n_g)
+  }
+
+  out <- list()
+  out_i <- 0L
+  for (comp_name in names(weights)) {
+    w <- as.numeric(weights[[comp_name]])
+    names(w) <- names(weights[[comp_name]])
+    mean_vec <- numeric(n_g)
+    sd_vec <- numeric(n_g)
+    for (g in seq_len(n_g)) {
+      mu_g <- as.numeric(implied[[g]]$mean)
+      s_g <- implied[[g]]$cov
+      if (is.null(dim(s_g))) {
+        s_g <- matrix(s_g, nrow = length(w), ncol = length(w))
+      }
+      nm <- colnames(s_g) %||% names(w)
+      names(mu_g) <- names(mu_g) %||% nm
+      w_use <- w[nm]
+      w_use[is.na(w_use)] <- 0
+      mu_use <- mu_g[nm]
+      mu_use[is.na(mu_use)] <- 0
+      var_g <- as.numeric(t(w_use) %*% s_g[nm, nm, drop = FALSE] %*% w_use)
+      sd_g <- sqrt(max(var_g, 0))
+      mean_g <- sum(w_use * mu_use)
+
+      mean_vec[[g]] <- mean_g
+      sd_vec[[g]] <- sd_g
+      out_i <- out_i + 1L
+      out[[out_i]] <- data.frame(
+        model = model_label,
+        composite = comp_name,
+        group = gl[[g]],
+        mean = mean_g,
+        sd = sd_g,
+        n = nobs[[g]],
+        stringsAsFactors = FALSE
+      )
+    }
+
+    n_tot <- sum(nobs)
+    w_n <- nobs / n_tot
+    mean_pool <- sum(w_n * mean_vec)
+    var_pool <- if (n_tot > 1) {
+      sum((nobs - 1) * (sd_vec^2) + nobs * (mean_vec - mean_pool)^2) / (n_tot - 1)
+    } else {
+      sum(w_n * sd_vec^2)
+    }
+    out_i <- out_i + 1L
+    out[[out_i]] <- data.frame(
+      model = model_label,
+      composite = comp_name,
+      group = "Pooled",
+      mean = mean_pool,
+      sd = sqrt(max(var_pool, 0)),
+      n = n_tot,
+      stringsAsFactors = FALSE
+    )
+  }
+  do.call(rbind, out)
+}
+
+.mgcfa_group_d_from_stats <- function(stats_df, ref_group, focal_group) {
+  ref <- stats_df[stats_df$group == ref_group, , drop = FALSE]
+  focal <- stats_df[stats_df$group == focal_group, , drop = FALSE]
+  if (nrow(ref) < 1L || nrow(focal) < 1L) {
+    return(data.frame())
+  }
+  merge_df <- merge(
+    ref[, c("composite", "mean", "sd"), drop = FALSE],
+    focal[, c("composite", "mean", "sd"), drop = FALSE],
+    by = "composite",
+    suffixes = c("_ref", "_focal")
+  )
+  pooled_sd <- sqrt((merge_df$sd_ref^2 + merge_df$sd_focal^2) / 2)
+  d <- (merge_df$mean_focal - merge_df$mean_ref) / pooled_sd
+  data.frame(
+    composite = merge_df$composite,
+    mean_diff = merge_df$mean_focal - merge_df$mean_ref,
+    d = d,
+    stringsAsFactors = FALSE
+  )
+}
+
+.mgcfa_observed_bias_delta <- function(
+  biased_stats,
+  adjusted_stats,
+  ref_group,
+  focal_group,
+  step
+) {
+  d_biased <- .mgcfa_group_d_from_stats(biased_stats, ref_group = ref_group, focal_group = focal_group)
+  d_adjusted <- .mgcfa_group_d_from_stats(adjusted_stats, ref_group = ref_group, focal_group = focal_group)
+  if (nrow(d_biased) == 0L || nrow(d_adjusted) == 0L) {
+    return(data.frame())
+  }
+  m <- merge(
+    d_biased,
+    d_adjusted,
+    by = "composite",
+    suffixes = c("_biased", "_adjusted")
+  )
+  data.frame(
+    step = step,
+    comparison = paste(focal_group, "vs", ref_group),
+    composite = m$composite,
+    d_biased = as.numeric(m$d_biased),
+    d_adjusted = as.numeric(m$d_adjusted),
+    dmacs_signed = as.numeric(m$d_adjusted - m$d_biased),
+    mean_diff_biased = as.numeric(m$mean_diff_biased),
+    mean_diff_adjusted = as.numeric(m$mean_diff_adjusted),
+    stringsAsFactors = FALSE
+  )
+}
+
+.mgcfa_observed_delta_against_biased <- function(
+  biased_stats,
+  compare_stats,
+  ref_group,
+  focal_group,
+  step,
+  class_label
+) {
+  d_biased <- .mgcfa_group_d_from_stats(biased_stats, ref_group = ref_group, focal_group = focal_group)
+  d_cmp <- .mgcfa_group_d_from_stats(compare_stats, ref_group = ref_group, focal_group = focal_group)
+  if (nrow(d_biased) == 0L || nrow(d_cmp) == 0L) {
+    return(data.frame())
+  }
+  m <- merge(d_biased, d_cmp, by = "composite", suffixes = c("_biased", "_class"))
+  data.frame(
+    step = step,
+    class = class_label,
+    comparison = paste(focal_group, "vs", ref_group),
+    composite = m$composite,
+    d_biased = as.numeric(m$d_biased),
+    d_class_partial = as.numeric(m$d_class),
+    dmacs_signed = as.numeric(m$d_class - m$d_biased),
+    stringsAsFactors = FALSE
+  )
+}
+
+.mgcfa_model_latent_stats <- function(fit, model_label) {
+  mean_lv <- tryCatch(lavaan::lavInspect(fit, "mean.lv"), error = function(e) NULL)
+  cov_lv <- tryCatch(lavaan::lavInspect(fit, "cov.lv"), error = function(e) NULL)
+  gl <- tryCatch(as.character(lavaan::lavInspect(fit, "group.label")), error = function(e) NULL)
+  nobs <- tryCatch(as.numeric(lavaan::lavInspect(fit, "nobs")), error = function(e) NULL)
+  if (is.null(mean_lv) || is.null(cov_lv) || is.null(gl)) {
+    return(data.frame())
+  }
+  if (!is.list(mean_lv)) {
+    mean_lv <- list(mean_lv)
+  }
+  if (!is.list(cov_lv)) {
+    cov_lv <- list(cov_lv)
+  }
+  if (length(mean_lv) != length(gl) || length(cov_lv) != length(gl)) {
+    return(data.frame())
+  }
+  if (is.null(nobs) || length(nobs) != length(gl) || any(!is.finite(nobs))) {
+    nobs <- rep(1, length(gl))
+  }
+
+  out <- list()
+  out_i <- 0L
+  lv_names <- colnames(mean_lv[[1L]]) %||% names(mean_lv[[1L]])
+  for (g in seq_along(gl)) {
+    mu <- as.numeric(mean_lv[[g]])
+    names(mu) <- lv_names
+    sigma <- cov_lv[[g]]
+    sdv <- sqrt(pmax(diag(sigma), 0))
+    names(sdv) <- colnames(sigma)
+    common <- intersect(names(mu), names(sdv))
+    for (lv in common) {
+      out_i <- out_i + 1L
+      out[[out_i]] <- data.frame(
+        model = model_label,
+        latent = lv,
+        group = gl[[g]],
+        mean = mu[[lv]],
+        sd = sdv[[lv]],
+        n = nobs[[g]],
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  if (out_i == 0L) {
+    return(data.frame())
+  }
+  df <- do.call(rbind, out)
+
+  pooled <- do.call(rbind, lapply(split(df, df$latent), function(dfi) {
+    n_tot <- sum(dfi$n)
+    w <- dfi$n / n_tot
+    m <- sum(w * dfi$mean)
+    v <- if (n_tot > 1) {
+      sum((dfi$n - 1) * (dfi$sd^2) + dfi$n * (dfi$mean - m)^2) / (n_tot - 1)
+    } else {
+      sum(w * dfi$sd^2)
+    }
+    data.frame(
+      model = unique(dfi$model)[[1L]],
+      latent = unique(dfi$latent)[[1L]],
+      group = "Pooled",
+      mean = m,
+      sd = sqrt(max(v, 0)),
+      n = n_tot,
+      stringsAsFactors = FALSE
+    )
+  }))
+  rbind(df, pooled)
+}
+
+.mgcfa_latent_group_d <- function(stats_df, ref_group, focal_group) {
+  ref <- stats_df[stats_df$group == ref_group, , drop = FALSE]
+  focal <- stats_df[stats_df$group == focal_group, , drop = FALSE]
+  if (nrow(ref) == 0L || nrow(focal) == 0L) {
+    return(data.frame())
+  }
+  m <- merge(
+    ref[, c("latent", "mean", "sd"), drop = FALSE],
+    focal[, c("latent", "mean", "sd"), drop = FALSE],
+    by = "latent",
+    suffixes = c("_ref", "_focal")
+  )
+  pooled_sd <- sqrt((m$sd_ref^2 + m$sd_focal^2) / 2)
+  data.frame(
+    latent = m$latent,
+    mean_diff = m$mean_focal - m$mean_ref,
+    d = (m$mean_focal - m$mean_ref) / pooled_sd,
+    stringsAsFactors = FALSE
+  )
+}
+
+.mgcfa_latent_bias_delta <- function(biased_stats, adjusted_stats, ref_group, focal_group, step) {
+  if (nrow(biased_stats) == 0L || nrow(adjusted_stats) == 0L) {
+    return(data.frame())
+  }
+  d_b <- .mgcfa_latent_group_d(biased_stats, ref_group = ref_group, focal_group = focal_group)
+  d_a <- .mgcfa_latent_group_d(adjusted_stats, ref_group = ref_group, focal_group = focal_group)
+  if (nrow(d_b) == 0L || nrow(d_a) == 0L) {
+    return(data.frame())
+  }
+  m <- merge(d_b, d_a, by = "latent", suffixes = c("_biased", "_adjusted"))
+  data.frame(
+    step = step,
+    comparison = paste(focal_group, "vs", ref_group),
+    latent = m$latent,
+    d_biased = as.numeric(m$d_biased),
+    d_adjusted = as.numeric(m$d_adjusted),
+    dmacs_signed = as.numeric(m$d_adjusted - m$d_biased),
+    mean_diff_biased = as.numeric(m$mean_diff_biased),
+    mean_diff_adjusted = as.numeric(m$mean_diff_adjusted),
+    stringsAsFactors = FALSE
+  )
+}
+
+.mgcfa_term_classes <- function(fit, terms) {
+  terms <- .mgcfa_normalize_terms(terms)
+  if (length(terms) == 0L) {
+    return(stats::setNames(character(), character()))
+  }
+  pt <- tryCatch(lavaan::parTable(fit), error = function(e) NULL)
+  if (is.null(pt) || nrow(pt) == 0L) {
+    return(stats::setNames(rep("unknown", length(terms)), terms))
+  }
+  ov <- tryCatch(lavaan::lavNames(fit, type = "ov"), error = function(e) character())
+  lv <- tryCatch(lavaan::lavNames(fit, type = "lv"), error = function(e) character())
+  rows <- vector("list", nrow(pt))
+  out_i <- 0L
+  for (i in seq_len(nrow(pt))) {
+    term <- .mgcfa_term_from_parts(
+      lhs = as.character(pt$lhs[[i]]),
+      op = as.character(pt$op[[i]]),
+      rhs = as.character(pt$rhs[[i]])
+    )
+    cls <- .mgcfa_constraint_class(
+      op = as.character(pt$op[[i]]),
+      lhs = as.character(pt$lhs[[i]]),
+      rhs = as.character(pt$rhs[[i]]),
+      ov_names = ov,
+      lv_names = lv
+    )
+    if (is.na(cls)) {
+      cls <- "unknown"
+    }
+    out_i <- out_i + 1L
+    rows[[out_i]] <- data.frame(term = term, class = cls, stringsAsFactors = FALSE)
+  }
+  map <- do.call(rbind, rows[seq_len(out_i)])
+  map <- map[!duplicated(map$term), , drop = FALSE]
+  cls <- map$class[match(terms, map$term)]
+  cls[is.na(cls) | !nzchar(cls)] <- "unknown"
+  stats::setNames(cls, terms)
+}
+
+.mgcfa_refit_with_group_partial <- function(base_fit, group_partial_terms) {
+  gp <- .mgcfa_normalize_terms(group_partial_terms)
+  tryCatch(
+    stats::update(base_fit, group.partial = gp),
+    error = function(e) NULL
+  )
 }
 
 .mgcfa_as_result <- function(x) {
@@ -1821,6 +2592,131 @@ mgcfa_plot_fit <- function(
     "df" = "DF",
     "npar" = "N Parameters",
     gsub("\\.", " ", toupper(key))
+  )
+}
+
+.mgcfa_as_named_list <- function(x, arg_name) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  if (!is.list(x)) {
+    x <- as.list(x)
+  }
+  nm <- names(x)
+  if (is.null(nm) || any(!nzchar(nm))) {
+    stop(sprintf("`%s` must be NULL or a named list/vector.", arg_name), call. = FALSE)
+  }
+  x
+}
+
+.mgcfa_step_rule_bundle <- function(
+  step,
+  default_rules,
+  default_policy,
+  default_min,
+  rules_by_step = NULL,
+  policy_by_step = NULL,
+  min_by_step = NULL
+) {
+  step <- as.character(step)[[1L]]
+  rules_step <- rules_by_step[[step]] %||% NULL
+  rules <- if (is.null(rules_step)) {
+    default_rules
+  } else {
+    .mgcfa_resolve_rule_set(rules = rules_step)
+  }
+
+  policy <- as.character(policy_by_step[[step]] %||% default_policy)[[1L]]
+  policy <- match.arg(policy, choices = c("all", "majority", "any", "at_least"))
+  min_step <- min_by_step[[step]] %||% default_min
+  if (!is.null(min_step)) {
+    min_step <- as.integer(min_step)
+    if (is.na(min_step) || min_step < 1L) {
+      stop(sprintf("Step-specific minimum pass count for `%s` must be a positive integer.", step), call. = FALSE)
+    }
+  }
+  list(
+    rules = rules,
+    policy = policy,
+    min_pass = min_step
+  )
+}
+
+.mgcfa_practical_change_table <- function(fits, measures = c("cfi", "rmsea", "srmr", "aic", "bic")) {
+  if (is.null(fits) || length(fits) < 2L) {
+    return(data.frame())
+  }
+  steps <- names(fits)
+  out <- vector("list", length(fits) - 1L)
+  for (i in 2:length(fits)) {
+    prev <- fits[[i - 1L]]
+    cur <- fits[[i]]
+    prev_vals <- suppressWarnings(lavaan::fitMeasures(prev, measures))
+    cur_vals <- suppressWarnings(lavaan::fitMeasures(cur, measures))
+    out[[i - 1L]] <- data.frame(
+      from_step = steps[[i - 1L]],
+      to_step = steps[[i]],
+      delta_cfi = as.numeric(cur_vals[["cfi"]] - prev_vals[["cfi"]]),
+      delta_rmsea = as.numeric(cur_vals[["rmsea"]] - prev_vals[["rmsea"]]),
+      delta_srmr = as.numeric(cur_vals[["srmr"]] - prev_vals[["srmr"]]),
+      delta_aic = as.numeric(cur_vals[["aic"]] - prev_vals[["aic"]]),
+      delta_bic = as.numeric(cur_vals[["bic"]] - prev_vals[["bic"]]),
+      stringsAsFactors = FALSE
+    )
+  }
+  do.call(rbind, out)
+}
+
+.mgcfa_build_decision_trace <- function(
+  fits,
+  step_failures,
+  partial_searches,
+  recovered_steps,
+  not_applicable_steps
+) {
+  if (is.null(fits) || length(fits) == 0L) {
+    return(data.frame())
+  }
+  steps <- names(fits)
+  out <- vector("list", length(steps))
+  for (i in seq_along(steps)) {
+    step <- steps[[i]]
+    sf <- step_failures[[step]] %||% list()
+    ps <- partial_searches[[step]] %||% list()
+    status <- if (!is.null(not_applicable_steps[[step]])) {
+      "not_applicable"
+    } else if (isTRUE(sf$failed) && !(step %in% (recovered_steps %||% character()))) {
+      "failed"
+    } else if (step %in% (recovered_steps %||% character())) {
+      "recovered_partial"
+    } else {
+      "ok"
+    }
+    out[[i]] <- data.frame(
+      step = step,
+      status = status,
+      failed_non_partial = isTRUE(sf$failed),
+      recovered = step %in% (recovered_steps %||% character()),
+      search_triggered = isTRUE(ps$triggered),
+      search_decision = as.character(ps$decision %||% NA_character_),
+      selected_terms = paste(.mgcfa_normalize_terms(ps$selected_added_terms %||% character()), collapse = ", "),
+      criterion = as.character(sf$criterion %||% NA_character_),
+      criterion_value = as.numeric(sf$value %||% NA_real_),
+      criterion_threshold = as.numeric(sf$threshold %||% NA_real_),
+      stringsAsFactors = FALSE
+    )
+  }
+  do.call(rbind, out)
+}
+
+.mgcfa_run_metadata <- function(call, include_steps, fit_measures) {
+  list(
+    timestamp_utc = format(as.POSIXct(Sys.time(), tz = "UTC"), tz = "UTC", usetz = TRUE),
+    r_version = R.version.string,
+    platform = paste(R.version$platform, R.version$arch, sep = " / "),
+    include_steps = as.character(include_steps),
+    fit_measures = as.character(fit_measures),
+    call = paste(deparse(call), collapse = "")
   )
 }
 
@@ -2385,6 +3281,8 @@ mgcfa_plot_fit <- function(
   use_best_if_no_pass,
   candidate_source,
   max_models,
+  use_parallel,
+  n_cores,
   allow_full_release,
   full_release_action,
   fit_measures
@@ -2397,6 +3295,15 @@ mgcfa_plot_fit <- function(
   if (is.na(max_models) || max_models < 1L) {
     max_models <- 5000L
   }
+  use_parallel <- isTRUE(use_parallel)
+  n_cores <- as.integer(n_cores %||% 1L)
+  if (is.na(n_cores) || n_cores < 1L) {
+    n_cores <- 1L
+  }
+  parallel_enabled <- isTRUE(use_parallel) && n_cores > 1L &&
+    !identical(.Platform$OS.type, "windows") &&
+    !isTRUE(stop_on_accept) &&
+    requireNamespace("parallel", quietly = TRUE)
   rule_set <- .mgcfa_resolve_rule_set(rules = rule_set)
   criterion <- if (length(rule_set) > 1L) "multi_rule" else rule_set[[1L]]$criterion
   threshold <- if (length(rule_set) > 1L) {
@@ -2715,6 +3622,9 @@ mgcfa_plot_fit <- function(
     min_active_constraints = as.integer(min_remaining),
     max_free_allowed = as.integer(max_free),
     max_models = max_models,
+    parallel_requested = use_parallel,
+    parallel_enabled = parallel_enabled,
+    parallel_n_cores = n_cores,
     truncated = isTRUE(truncated),
     evaluated_models = as.integer(nrow(candidates)),
     criterion = criterion,
@@ -3262,5 +4172,5 @@ mgcfa_plot_fit <- function(
 }
 
 if (getRversion() >= "2.15.1") {
-  utils::globalVariables(c("step", "value_plot", "series", "variant"))
+  utils::globalVariables(c("step", "value_plot", "series", "variant", "series_plot", "measure_label", "variant_plot"))
 }

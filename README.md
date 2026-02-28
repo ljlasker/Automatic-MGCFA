@@ -23,9 +23,11 @@ remotes::install_github("ljlasker/Automatic-MGCFA")
 - Run automatic partial-invariance search at failed stages (prompt, never, or always).
 - Automatically evaluate exhaustive higher-stage subsets for `lv.variances`, `lv.covariances`, `residual.covariances`, `regressions`, and `means` (for example, general-only, general+subset, up to nearly unconstrained).
 - Automatically mark stage tests as not-applicable when a constraint class is absent (for example, latent covariances in a one-factor model).
+- Support step-specific decision rules and voting policies (for example, scalar uses multi-rule `any`, strict uses `all`).
 - By default, stop progression after the first constrained stage that remains unacceptable.
 - Preserve failed non-partial outputs for failed constrained stages in `out$failed_step_outputs`.
-- Return tidy fit tables and plotting-ready outputs.
+- Return tidy fit tables, practical step-change summaries (`out$practical_change_table`), and decision traces (`out$decision_trace`).
+- Compute signed bias effect sizes (`mgcfa_bias_effects`) for observed composites/items and latent mean/SD comparisons.
 
 ## Quick Start
 
@@ -125,6 +127,18 @@ out_multi_rule <- mgcfa_auto(
   partial_search_rule_min = 2L
 )
 
+# Step-specific rules (example: scalar uses any-of-two rules)
+out_step_specific <- mgcfa_auto(
+  ...,
+  partial_failure_rules_by_step = list(
+    scalar = list(
+      list(criterion = "chisq_pvalue", threshold = 0.05),
+      list(criterion = "delta_cfi", threshold = 0.01)
+    )
+  ),
+  partial_failure_rule_policy_by_step = list(scalar = "any")
+)
+
 # Test mean invariance without constraining latent variances
 out_means_free_lvvar <- mgcfa_auto(
   ...,
@@ -169,6 +183,27 @@ df_fit <- mgcfa_tidy_fit(
   rounding = "signif"
 )
 head(df_fit)
+```
+
+## Bias Effect Sizes
+
+```r
+bias_out <- mgcfa_bias_effects(
+  out,
+  composites = list(
+    Total = c("x1", "x2", "x3", "x4"),
+    Subtest_A = c("x1", "x2")
+  ),
+  include_items = TRUE
+)
+
+print(bias_out)
+
+# Signed dMACS-style bias effects on observed outcomes
+head(bias_out$observed_effects)
+
+# Per-group and pooled latent means/SDs for biased vs adjusted models
+head(bias_out$latent_group_stats)
 ```
 
 If you see `x must be an object returned by mgcfa_auto()`, pass the full
