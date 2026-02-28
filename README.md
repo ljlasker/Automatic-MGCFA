@@ -36,6 +36,11 @@ remotes::install_github("ljlasker/Automatic-MGCFA")
 mgcfa_launch_app()
 ```
 
+The app supports failure/search criteria including `chisq_pvalue`,
+`delta_cfi`, `aic_weight`, `bic_weight`, `aic_bic_weight`, and
+`measure_change` (with user-specified `lavaan::fitMeasures` names such as
+`aic`, `bic`, `cfi`, `tli`, `rmsea`, `srmr`, `chisq`, etc.).
+
 ## Quick Start
 
 ```r

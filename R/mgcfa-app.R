@@ -104,17 +104,74 @@ mgcfa_app <- function() {
         shiny::selectInput(
           "partial_failure_criterion",
           "Failure criterion",
-          choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change", "none"),
+          choices = c(
+            "chisq_pvalue",
+            "delta_cfi",
+            "aic_weight",
+            "bic_weight",
+            "aic_bic_weight",
+            "measure_change",
+            "none"
+          ),
           selected = "chisq_pvalue"
         ),
         shiny::numericInput("partial_failure_threshold", "Failure threshold (optional)", value = NA, step = 0.01),
+        shiny::conditionalPanel(
+          "input.partial_failure_criterion == 'measure_change'",
+          shiny::textInput(
+            "partial_failure_measure",
+            "Failure fit measure (lavaan::fitMeasures name)",
+            value = "aic",
+            placeholder = "e.g., aic, bic, cfi, tli, rmsea, srmr, chisq"
+          ),
+          shiny::selectInput(
+            "partial_failure_direction",
+            "Failure direction",
+            choices = c("decrease", "increase"),
+            selected = "decrease"
+          )
+        ),
         shiny::selectInput(
           "partial_search_criterion",
           "Partial-search criterion",
-          choices = c("chisq_pvalue", "delta_cfi", "aic_bic_weight", "measure_change"),
+          choices = c(
+            "chisq_pvalue",
+            "delta_cfi",
+            "aic_weight",
+            "bic_weight",
+            "aic_bic_weight",
+            "measure_change"
+          ),
           selected = "chisq_pvalue"
         ),
         shiny::numericInput("partial_search_threshold", "Partial-search threshold (optional)", value = NA, step = 0.01),
+        shiny::conditionalPanel(
+          "input.partial_search_criterion == 'measure_change'",
+          shiny::textInput(
+            "partial_search_measure",
+            "Search fit measure (lavaan::fitMeasures name)",
+            value = "aic",
+            placeholder = "e.g., aic, bic, cfi, tli, rmsea, srmr, chisq"
+          ),
+          shiny::selectInput(
+            "partial_search_direction",
+            "Search direction",
+            choices = c("decrease", "increase"),
+            selected = "decrease"
+          )
+        ),
+        shiny::numericInput(
+          "partial_ic_bic_weight",
+          "BIC weight for AIC/BIC-weight criteria (AIC = 1 - BIC)",
+          value = 0.50,
+          min = 0,
+          max = 1,
+          step = 0.05
+        ),
+        shiny::helpText(
+          "For AIC/BIC-weight criteria, the candidate model is compared to the previous model using pairwise model weights.",
+          "AIC-only = aic_weight, BIC-only = bic_weight, or use aic_bic_weight with custom BIC weight."
+        ),
 
         shiny::actionButton("run_mgcfa", "Run MGCFA", class = "btn-primary")
       ),
@@ -222,20 +279,48 @@ mgcfa_app <- function() {
       rv$report <- NULL
 
       fit_or_err <- tryCatch({
+        fail_cfg <- .mgcfa_app_parse_criterion(
+          criterion = input$partial_failure_criterion,
+          threshold = input$partial_failure_threshold,
+          measure = input$partial_failure_measure %||% "aic",
+          direction = input$partial_failure_direction %||% "decrease",
+          ic_bic_weight = input$partial_ic_bic_weight,
+          allow_none = TRUE
+        )
+        search_cfg <- .mgcfa_app_parse_criterion(
+          criterion = input$partial_search_criterion,
+          threshold = input$partial_search_threshold,
+          measure = input$partial_search_measure %||% input$partial_failure_measure %||% "aic",
+          direction = input$partial_search_direction %||% input$partial_failure_direction %||% "decrease",
+          ic_bic_weight = input$partial_ic_bic_weight,
+          allow_none = FALSE
+        )
+
         args <- list(
           model_type = input$model_type,
           include_steps = input$include_steps,
           partial_auto_search = input$partial_auto_search,
-          partial_failure_criterion = input$partial_failure_criterion,
-          partial_search_criterion = input$partial_search_criterion,
+          partial_failure_criterion = fail_cfg$criterion,
+          partial_search_criterion = search_cfg$criterion,
           stop_at_first_unacceptable = isTRUE(input$stop_early)
         )
 
-        if (is.finite(input$partial_failure_threshold)) {
-          args$partial_failure_threshold <- input$partial_failure_threshold
+        if (!is.null(fail_cfg$threshold)) {
+          args$partial_failure_threshold <- fail_cfg$threshold
         }
-        if (is.finite(input$partial_search_threshold)) {
-          args$partial_search_threshold <- input$partial_search_threshold
+        if (!is.null(search_cfg$threshold)) {
+          args$partial_search_threshold <- search_cfg$threshold
+        }
+        if (!is.null(fail_cfg$measure)) {
+          args$partial_failure_measure <- fail_cfg$measure
+          args$partial_failure_direction <- fail_cfg$direction
+        }
+        if (!is.null(search_cfg$measure)) {
+          args$partial_search_measure <- search_cfg$measure
+          args$partial_search_direction <- search_cfg$direction
+        }
+        if (!is.null(fail_cfg$ic_bic_weight) || !is.null(search_cfg$ic_bic_weight)) {
+          args$partial_ic_bic_weight <- search_cfg$ic_bic_weight %||% fail_cfg$ic_bic_weight
         }
 
         if (identical(input$model_type, "custom")) {
@@ -397,5 +482,93 @@ mgcfa_app <- function() {
     sample_sd = args$sample_sd %||% NULL,
     group_labels = args$group_labels %||% NULL,
     matrices_are_cor = isTRUE(args$matrices_are_cor)
+  )
+}
+
+.mgcfa_app_parse_criterion <- function(
+  criterion,
+  threshold = NULL,
+  measure = "aic",
+  direction = c("decrease", "increase"),
+  ic_bic_weight = 0.5,
+  allow_none = FALSE
+) {
+  criterion <- as.character(criterion %||% "")
+  direction <- match.arg(as.character(direction)[[1L]], choices = c("decrease", "increase"))
+
+  if (identical(criterion, "none")) {
+    if (!isTRUE(allow_none)) {
+      stop("`none` is not allowed for this criterion slot.", call. = FALSE)
+    }
+    return(list(
+      criterion = "none",
+      threshold = NULL,
+      measure = NULL,
+      direction = NULL,
+      ic_bic_weight = NULL
+    ))
+  }
+
+  if (!criterion %in% c("chisq_pvalue", "delta_cfi", "aic_weight", "bic_weight", "aic_bic_weight", "measure_change")) {
+    stop("Unsupported criterion: ", criterion, call. = FALSE)
+  }
+
+  if (!is.null(threshold) && is.finite(threshold)) {
+    threshold_out <- as.numeric(threshold)
+  } else {
+    threshold_out <- NULL
+  }
+
+  if (identical(criterion, "aic_weight")) {
+    return(list(
+      criterion = "aic_bic_weight",
+      threshold = threshold_out,
+      measure = NULL,
+      direction = NULL,
+      ic_bic_weight = 0
+    ))
+  }
+  if (identical(criterion, "bic_weight")) {
+    return(list(
+      criterion = "aic_bic_weight",
+      threshold = threshold_out,
+      measure = NULL,
+      direction = NULL,
+      ic_bic_weight = 1
+    ))
+  }
+  if (identical(criterion, "aic_bic_weight")) {
+    w <- as.numeric(ic_bic_weight)[[1L]]
+    if (!is.finite(w) || w < 0 || w > 1) {
+      stop("BIC weight must be in [0, 1].", call. = FALSE)
+    }
+    return(list(
+      criterion = "aic_bic_weight",
+      threshold = threshold_out,
+      measure = NULL,
+      direction = NULL,
+      ic_bic_weight = w
+    ))
+  }
+  if (identical(criterion, "measure_change")) {
+    m <- trimws(as.character(measure %||% ""))
+    if (!nzchar(m)) {
+      stop("A fit measure name is required for `measure_change`.", call. = FALSE)
+    }
+    return(list(
+      criterion = "measure_change",
+      threshold = threshold_out,
+      measure = m,
+      direction = direction,
+      ic_bic_weight = NULL
+    ))
+  }
+
+  list(
+    criterion = criterion,
+    threshold = threshold_out,
+    measure = NULL,
+    direction = NULL,
+    ic_bic_weight = NULL
   )
 }
