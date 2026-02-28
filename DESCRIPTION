@@ -10,6 +10,8 @@ Description: Automates multi-group CFA and SEM invariance workflows from
     lavaan syntax and model builders from single-factor templates and
     thresholded exploratory EFA/PCA loadings, including partial invariance
     constraints.
+URL: https://github.com/ljlasker/Automatic-MGCFA,
+    https://ljlasker.github.io/Automatic-MGCFA/
 License: MIT
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

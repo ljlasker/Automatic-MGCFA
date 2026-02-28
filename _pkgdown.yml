@@ -1,6 +1,8 @@
 template:
   bootstrap: 5
 
+url: https://ljlasker.github.io/Automatic-MGCFA/
+
 home:
   title: AutomaticMGCFA
   description: Automatic multi-group CFA and SEM invariance workflows.
@@ -20,9 +22,19 @@ reference:
       - mgcfa_plot_fit
       - mgcfa_report
       - mgcfa_compare_results
+  - title: Interactive App
+    contents:
+      - mgcfa_app
+      - mgcfa_launch_app
   - title: Bias Effect Sizes
     contents:
       - mgcfa_bias_effects
+  - title: Print Methods
+    contents:
+      - print.mgcfa_result
+      - print.mgcfa_input
+      - print.mgcfa_report
+      - print.mgcfa_bias_effects
 
 navbar:
   structure:
