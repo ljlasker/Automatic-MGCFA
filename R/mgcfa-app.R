@@ -115,20 +115,39 @@ mgcfa_app <- function() {
           ),
           selected = "chisq_pvalue"
         ),
-        shiny::numericInput("partial_failure_threshold", "Failure threshold (optional)", value = NA, step = 0.01),
+        shiny::checkboxInput("use_failure_rules", "Use multi-rule failure decision", value = FALSE),
         shiny::conditionalPanel(
-          "input.partial_failure_criterion == 'measure_change'",
-          shiny::textInput(
-            "partial_failure_measure",
-            "Failure fit measure (lavaan::fitMeasures name)",
-            value = "aic",
-            placeholder = "e.g., aic, bic, cfi, tli, rmsea, srmr, chisq"
-          ),
+          "input.use_failure_rules == false",
+          shiny::numericInput("partial_failure_threshold", "Failure threshold (optional)", value = NA, step = 0.01),
+          shiny::conditionalPanel(
+            "input.partial_failure_criterion == 'measure_change'",
+            shiny::textInput(
+              "partial_failure_measure",
+              "Failure fit measure (lavaan::fitMeasures name)",
+              value = "aic",
+              placeholder = "e.g., aic, bic, cfi, tli, rmsea, srmr, chisq"
+            ),
+            shiny::selectInput(
+              "partial_failure_direction",
+              "Failure direction",
+              choices = c("decrease", "increase"),
+              selected = "decrease"
+            )
+          )
+        ),
+        shiny::conditionalPanel(
+          "input.use_failure_rules == true",
+          shiny::numericInput("failure_n_rules", "Number of failure rules", value = 3, min = 1, max = 8, step = 1),
+          shiny::uiOutput("failure_rules_ui"),
           shiny::selectInput(
-            "partial_failure_direction",
-            "Failure direction",
-            choices = c("decrease", "increase"),
-            selected = "decrease"
+            "failure_rule_policy",
+            "Failure rule policy",
+            choices = c("all", "majority", "any", "at_least"),
+            selected = "majority"
+          ),
+          shiny::conditionalPanel(
+            "input.failure_rule_policy == 'at_least'",
+            shiny::numericInput("failure_rule_min", "Failure minimum passing rules", value = 2, min = 1, step = 1)
           )
         ),
         shiny::selectInput(
@@ -144,20 +163,39 @@ mgcfa_app <- function() {
           ),
           selected = "chisq_pvalue"
         ),
-        shiny::numericInput("partial_search_threshold", "Partial-search threshold (optional)", value = NA, step = 0.01),
+        shiny::checkboxInput("use_search_rules", "Use multi-rule partial-search decision", value = FALSE),
         shiny::conditionalPanel(
-          "input.partial_search_criterion == 'measure_change'",
-          shiny::textInput(
-            "partial_search_measure",
-            "Search fit measure (lavaan::fitMeasures name)",
-            value = "aic",
-            placeholder = "e.g., aic, bic, cfi, tli, rmsea, srmr, chisq"
-          ),
+          "input.use_search_rules == false",
+          shiny::numericInput("partial_search_threshold", "Partial-search threshold (optional)", value = NA, step = 0.01),
+          shiny::conditionalPanel(
+            "input.partial_search_criterion == 'measure_change'",
+            shiny::textInput(
+              "partial_search_measure",
+              "Search fit measure (lavaan::fitMeasures name)",
+              value = "aic",
+              placeholder = "e.g., aic, bic, cfi, tli, rmsea, srmr, chisq"
+            ),
+            shiny::selectInput(
+              "partial_search_direction",
+              "Search direction",
+              choices = c("decrease", "increase"),
+              selected = "decrease"
+            )
+          )
+        ),
+        shiny::conditionalPanel(
+          "input.use_search_rules == true",
+          shiny::numericInput("search_n_rules", "Number of partial-search rules", value = 3, min = 1, max = 8, step = 1),
+          shiny::uiOutput("search_rules_ui"),
           shiny::selectInput(
-            "partial_search_direction",
-            "Search direction",
-            choices = c("decrease", "increase"),
-            selected = "decrease"
+            "search_rule_policy",
+            "Partial-search rule policy",
+            choices = c("all", "majority", "any", "at_least"),
+            selected = "majority"
+          ),
+          shiny::conditionalPanel(
+            "input.search_rule_policy == 'at_least'",
+            shiny::numericInput("search_rule_min", "Partial-search minimum passing rules", value = 2, min = 1, step = 1)
           )
         ),
         shiny::numericInput(
@@ -170,7 +208,8 @@ mgcfa_app <- function() {
         ),
         shiny::helpText(
           "For AIC/BIC-weight criteria, the candidate model is compared to the previous model using pairwise model weights.",
-          "AIC-only = aic_weight, BIC-only = bic_weight, or use aic_bic_weight with custom BIC weight."
+          "AIC-only = aic_weight, BIC-only = bic_weight, or use aic_bic_weight with custom BIC weight.",
+          "For measure_change, any valid lavaan fit measure name can be used (including those provided by installed extensions)."
         ),
 
         shiny::actionButton("run_mgcfa", "Run MGCFA", class = "btn-primary")
@@ -233,6 +272,22 @@ mgcfa_app <- function() {
       .mgcfa_app_unpack_summary_input(obj)
     })
 
+    output$failure_rules_ui <- shiny::renderUI({
+      shiny::req(isTRUE(input$use_failure_rules))
+      n <- as.integer(input$failure_n_rules %||% 1L)
+      n <- max(1L, min(8L, if (is.na(n)) 1L else n))
+      rows <- lapply(seq_len(n), function(i) .mgcfa_app_rule_row_ui("failure", i))
+      do.call(shiny::tagList, rows)
+    })
+
+    output$search_rules_ui <- shiny::renderUI({
+      shiny::req(isTRUE(input$use_search_rules))
+      n <- as.integer(input$search_n_rules %||% 1L)
+      n <- max(1L, min(8L, if (is.na(n)) 1L else n))
+      rows <- lapply(seq_len(n), function(i) .mgcfa_app_rule_row_ui("search", i))
+      do.call(shiny::tagList, rows)
+    })
+
     shiny::observeEvent(raw_data(), {
       dat <- raw_data()
       shiny::updateSelectInput(session, "group_var", choices = names(dat), selected = names(dat)[[1L]])
@@ -279,48 +334,100 @@ mgcfa_app <- function() {
       rv$report <- NULL
 
       fit_or_err <- tryCatch({
-        fail_cfg <- .mgcfa_app_parse_criterion(
-          criterion = input$partial_failure_criterion,
-          threshold = input$partial_failure_threshold,
-          measure = input$partial_failure_measure %||% "aic",
-          direction = input$partial_failure_direction %||% "decrease",
-          ic_bic_weight = input$partial_ic_bic_weight,
-          allow_none = TRUE
-        )
-        search_cfg <- .mgcfa_app_parse_criterion(
-          criterion = input$partial_search_criterion,
-          threshold = input$partial_search_threshold,
-          measure = input$partial_search_measure %||% input$partial_failure_measure %||% "aic",
-          direction = input$partial_search_direction %||% input$partial_failure_direction %||% "decrease",
-          ic_bic_weight = input$partial_ic_bic_weight,
-          allow_none = FALSE
-        )
-
         args <- list(
           model_type = input$model_type,
           include_steps = input$include_steps,
           partial_auto_search = input$partial_auto_search,
-          partial_failure_criterion = fail_cfg$criterion,
-          partial_search_criterion = search_cfg$criterion,
+          partial_failure_criterion = "chisq_pvalue",
+          partial_search_criterion = "chisq_pvalue",
           stop_at_first_unacceptable = isTRUE(input$stop_early)
         )
+        if (isTRUE(input$use_failure_rules)) {
+          n_fail <- as.integer(input$failure_n_rules %||% 1L)
+          n_fail <- max(1L, min(8L, if (is.na(n_fail)) 1L else n_fail))
+          fail_criteria <- vapply(seq_len(n_fail), function(i) as.character(input[[paste0("failure_rule_criterion_", i)]] %||% "chisq_pvalue"), character(1L))
+          fail_thresholds <- vapply(seq_len(n_fail), function(i) as.numeric(input[[paste0("failure_rule_threshold_", i)]] %||% NA_real_), numeric(1L))
+          fail_measures <- vapply(seq_len(n_fail), function(i) as.character(input[[paste0("failure_rule_measure_", i)]] %||% "aic"), character(1L))
+          fail_dirs <- vapply(seq_len(n_fail), function(i) as.character(input[[paste0("failure_rule_direction_", i)]] %||% "decrease"), character(1L))
+          fail_w <- vapply(seq_len(n_fail), function(i) as.numeric(input[[paste0("failure_rule_ic_bic_weight_", i)]] %||% input$partial_ic_bic_weight %||% 0.5), numeric(1L))
+          args$partial_failure_rules <- .mgcfa_app_build_rules(
+            criteria = fail_criteria,
+            thresholds = fail_thresholds,
+            measures = fail_measures,
+            directions = fail_dirs,
+            ic_bic_weights = fail_w
+          )
+          args$partial_failure_rule_policy <- as.character(input$failure_rule_policy %||% "majority")
+          if (identical(args$partial_failure_rule_policy, "at_least")) {
+            min_fail <- as.integer(input$failure_rule_min %||% NA_integer_)
+            if (!is.na(min_fail) && min_fail > 0L) {
+              args$partial_failure_rule_min <- min_fail
+            }
+          }
+        } else {
+          fail_cfg <- .mgcfa_app_parse_criterion(
+            criterion = input$partial_failure_criterion,
+            threshold = input$partial_failure_threshold,
+            measure = input$partial_failure_measure %||% "aic",
+            direction = input$partial_failure_direction %||% "decrease",
+            ic_bic_weight = input$partial_ic_bic_weight,
+            allow_none = TRUE
+          )
+          args$partial_failure_criterion <- fail_cfg$criterion
+          if (!is.null(fail_cfg$threshold)) {
+            args$partial_failure_threshold <- fail_cfg$threshold
+          }
+          if (!is.null(fail_cfg$measure)) {
+            args$partial_failure_measure <- fail_cfg$measure
+            args$partial_failure_direction <- fail_cfg$direction
+          }
+          if (!is.null(fail_cfg$ic_bic_weight)) {
+            args$partial_ic_bic_weight <- fail_cfg$ic_bic_weight
+          }
+        }
 
-        if (!is.null(fail_cfg$threshold)) {
-          args$partial_failure_threshold <- fail_cfg$threshold
-        }
-        if (!is.null(search_cfg$threshold)) {
-          args$partial_search_threshold <- search_cfg$threshold
-        }
-        if (!is.null(fail_cfg$measure)) {
-          args$partial_failure_measure <- fail_cfg$measure
-          args$partial_failure_direction <- fail_cfg$direction
-        }
-        if (!is.null(search_cfg$measure)) {
-          args$partial_search_measure <- search_cfg$measure
-          args$partial_search_direction <- search_cfg$direction
-        }
-        if (!is.null(fail_cfg$ic_bic_weight) || !is.null(search_cfg$ic_bic_weight)) {
-          args$partial_ic_bic_weight <- search_cfg$ic_bic_weight %||% fail_cfg$ic_bic_weight
+        if (isTRUE(input$use_search_rules)) {
+          n_search <- as.integer(input$search_n_rules %||% 1L)
+          n_search <- max(1L, min(8L, if (is.na(n_search)) 1L else n_search))
+          search_criteria <- vapply(seq_len(n_search), function(i) as.character(input[[paste0("search_rule_criterion_", i)]] %||% "chisq_pvalue"), character(1L))
+          search_thresholds <- vapply(seq_len(n_search), function(i) as.numeric(input[[paste0("search_rule_threshold_", i)]] %||% NA_real_), numeric(1L))
+          search_measures <- vapply(seq_len(n_search), function(i) as.character(input[[paste0("search_rule_measure_", i)]] %||% "aic"), character(1L))
+          search_dirs <- vapply(seq_len(n_search), function(i) as.character(input[[paste0("search_rule_direction_", i)]] %||% "decrease"), character(1L))
+          search_w <- vapply(seq_len(n_search), function(i) as.numeric(input[[paste0("search_rule_ic_bic_weight_", i)]] %||% input$partial_ic_bic_weight %||% 0.5), numeric(1L))
+          args$partial_search_rules <- .mgcfa_app_build_rules(
+            criteria = search_criteria,
+            thresholds = search_thresholds,
+            measures = search_measures,
+            directions = search_dirs,
+            ic_bic_weights = search_w
+          )
+          args$partial_search_rule_policy <- as.character(input$search_rule_policy %||% "majority")
+          if (identical(args$partial_search_rule_policy, "at_least")) {
+            min_search <- as.integer(input$search_rule_min %||% NA_integer_)
+            if (!is.na(min_search) && min_search > 0L) {
+              args$partial_search_rule_min <- min_search
+            }
+          }
+        } else {
+          search_cfg <- .mgcfa_app_parse_criterion(
+            criterion = input$partial_search_criterion,
+            threshold = input$partial_search_threshold,
+            measure = input$partial_search_measure %||% input$partial_failure_measure %||% "aic",
+            direction = input$partial_search_direction %||% input$partial_failure_direction %||% "decrease",
+            ic_bic_weight = input$partial_ic_bic_weight,
+            allow_none = FALSE
+          )
+          args$partial_search_criterion <- search_cfg$criterion
+          if (!is.null(search_cfg$threshold)) {
+            args$partial_search_threshold <- search_cfg$threshold
+          }
+          if (!is.null(search_cfg$measure)) {
+            args$partial_search_measure <- search_cfg$measure
+            args$partial_search_direction <- search_cfg$direction
+          }
+          if (!is.null(search_cfg$ic_bic_weight)) {
+            args$partial_ic_bic_weight <- search_cfg$ic_bic_weight
+          }
         }
 
         if (identical(input$model_type, "custom")) {
@@ -483,6 +590,108 @@ mgcfa_app <- function() {
     group_labels = args$group_labels %||% NULL,
     matrices_are_cor = isTRUE(args$matrices_are_cor)
   )
+}
+
+.mgcfa_app_rule_row_ui <- function(prefix, i) {
+  if (!requireNamespace("shiny", quietly = TRUE)) {
+    stop("Package `shiny` is required.", call. = FALSE)
+  }
+  id <- function(stem) paste0(prefix, "_rule_", stem, "_", i)
+  shiny::tagList(
+    shiny::h5(sprintf("Rule %d", i)),
+    shiny::selectInput(
+      id("criterion"),
+      "Criterion",
+      choices = c(
+        "chisq_pvalue",
+        "delta_cfi",
+        "aic_weight",
+        "bic_weight",
+        "aic_bic_weight",
+        "measure_change"
+      ),
+      selected = "chisq_pvalue"
+    ),
+    shiny::numericInput(id("threshold"), "Threshold (optional)", value = NA, step = 0.01),
+    shiny::textInput(
+      id("measure"),
+      "Fit measure (used by measure_change)",
+      value = "aic",
+      placeholder = "e.g., aic, bic, cfi, tli, rmsea, srmr, chisq"
+    ),
+    shiny::selectInput(
+      id("direction"),
+      "Direction (used by measure_change)",
+      choices = c("decrease", "increase"),
+      selected = "decrease"
+    ),
+    shiny::numericInput(
+      id("ic_bic_weight"),
+      "BIC weight (used by aic_bic_weight)",
+      value = 0.50,
+      min = 0,
+      max = 1,
+      step = 0.05
+    ),
+    shiny::hr()
+  )
+}
+
+.mgcfa_app_build_rules <- function(
+  criteria,
+  thresholds = NULL,
+  measures = NULL,
+  directions = NULL,
+  ic_bic_weights = NULL
+) {
+  criteria <- as.character(criteria %||% character())
+  n <- length(criteria)
+  if (n < 1L) {
+    stop("At least one rule is required.", call. = FALSE)
+  }
+
+  expand <- function(x, default) {
+    if (is.null(x)) {
+      return(rep(default, n))
+    }
+    if (length(x) == 1L) {
+      return(rep(x, n))
+    }
+    if (length(x) != n) {
+      stop("Rule vectors must be length 1 or match the number of criteria.", call. = FALSE)
+    }
+    x
+  }
+
+  thresholds <- expand(thresholds, NA_real_)
+  measures <- expand(measures, "aic")
+  directions <- expand(directions, "decrease")
+  ic_bic_weights <- expand(ic_bic_weights, 0.5)
+
+  out <- vector("list", n)
+  for (i in seq_len(n)) {
+    cfg <- .mgcfa_app_parse_criterion(
+      criterion = criteria[[i]],
+      threshold = thresholds[[i]],
+      measure = measures[[i]],
+      direction = directions[[i]],
+      ic_bic_weight = ic_bic_weights[[i]],
+      allow_none = FALSE
+    )
+    rule <- list(criterion = cfg$criterion)
+    if (!is.null(cfg$threshold)) {
+      rule$threshold <- cfg$threshold
+    }
+    if (!is.null(cfg$measure)) {
+      rule$measure <- cfg$measure
+      rule$direction <- cfg$direction
+    }
+    if (!is.null(cfg$ic_bic_weight)) {
+      rule$ic_bic_weight <- cfg$ic_bic_weight
+    }
+    out[[i]] <- rule
+  }
+  out
 }
 
 .mgcfa_app_parse_criterion <- function(

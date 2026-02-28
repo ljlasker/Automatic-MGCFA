@@ -74,3 +74,32 @@ test_that("app criterion parser supports AIC/BIC aliases and measure_change", {
   expect_identical(m_cfg$direction, "increase")
   expect_equal(m_cfg$threshold, 0.02)
 })
+
+test_that("app rule builder creates normalized multi-rule lists", {
+  rules <- .mgcfa_app_build_rules(
+    criteria = c("aic_weight", "bic_weight", "measure_change"),
+    thresholds = c(0.6, 0.55, 0.01),
+    measures = c("aic", "bic", "rmsea"),
+    directions = c("decrease", "decrease", "decrease"),
+    ic_bic_weights = c(0.5, 0.5, 0.5)
+  )
+
+  expect_equal(length(rules), 3L)
+  expect_identical(rules[[1]]$criterion, "aic_bic_weight")
+  expect_equal(rules[[1]]$ic_bic_weight, 0)
+  expect_identical(rules[[2]]$criterion, "aic_bic_weight")
+  expect_equal(rules[[2]]$ic_bic_weight, 1)
+  expect_identical(rules[[3]]$criterion, "measure_change")
+  expect_identical(rules[[3]]$measure, "rmsea")
+  expect_identical(rules[[3]]$direction, "decrease")
+})
+
+test_that("app rule builder validates length mismatches", {
+  expect_error(
+    .mgcfa_app_build_rules(
+      criteria = c("chisq_pvalue", "delta_cfi"),
+      thresholds = c(0.05, 0.01, 0.2)
+    ),
+    "length 1 or match"
+  )
+})

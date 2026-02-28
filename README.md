@@ -40,6 +40,9 @@ The app supports failure/search criteria including `chisq_pvalue`,
 `delta_cfi`, `aic_weight`, `bic_weight`, `aic_bic_weight`, and
 `measure_change` (with user-specified `lavaan::fitMeasures` names such as
 `aic`, `bic`, `cfi`, `tli`, `rmsea`, `srmr`, `chisq`, etc.).
+It also supports multi-rule decisions with policies (`all`, `majority`,
+`any`, `at_least`) for both stage-failure detection and automatic
+partial-search acceptance.
 
 ## Quick Start
 
