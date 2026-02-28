@@ -1738,7 +1738,10 @@ mgcfa_plot_fit <- function(
 #' Produces signed bias-effect contrasts (dMACS-style deltas) by comparing the
 #' failed non-partial model at each recovered step to the selected bias-adjusted
 #' model. Supports observed item/composite outcomes and latent mean/SD
-#' comparisons, with optional decomposition by freed parameter class.
+#' comparisons, with optional decomposition by freed parameter class. Also
+#' returns item/composite bias effect-size families used in JLLJ RPubs and the
+#' cited literature, including \code{dMACS}, \code{dMACS_Signed},
+#' \code{dMACS_True}, \code{SDI2}, \code{UDI2}, and \code{SUDI2}.
 #'
 #' @param x An object returned by \code{mgcfa_auto()}.
 #' @param steps Optional character vector of recovered steps to summarize.
@@ -1816,6 +1819,7 @@ mgcfa_bias_effects <- function(
 
   observed_tables <- list()
   observed_stats_tables <- list()
+  metric_tables <- list()
   latent_tables <- list()
   latent_stats_tables <- list()
   class_tables <- list()
@@ -1855,6 +1859,23 @@ mgcfa_bias_effects <- function(
       step = step
     )
     observed_tables[[step]] <- obs_cmp
+    metrics_biased <- .mgcfa_effect_size_table(
+      fit = failed_fit,
+      weights = comp_weights,
+      ref_group = group_pair$reference,
+      focal_group = group_pair$focal,
+      step = step,
+      model_label = "Biased (Non-Partial)"
+    )
+    metrics_adjusted <- .mgcfa_effect_size_table(
+      fit = adjusted_fit,
+      weights = comp_weights,
+      ref_group = group_pair$reference,
+      focal_group = group_pair$focal,
+      step = step,
+      model_label = "Bias-Adjusted (Selected)"
+    )
+    metric_tables[[step]] <- rbind(metrics_biased, metrics_adjusted)
     observed_stats_tables[[step]] <- rbind(
       transform(obs_biased, step = step, stringsAsFactors = FALSE),
       transform(obs_adjusted, step = step, stringsAsFactors = FALSE)
@@ -1940,6 +1961,8 @@ mgcfa_bias_effects <- function(
 
   observed_effects <- if (length(observed_tables) > 0L) do.call(rbind, observed_tables) else data.frame()
   observed_group_stats <- if (length(observed_stats_tables) > 0L) do.call(rbind, observed_stats_tables) else data.frame()
+  effect_size_metrics <- if (length(metric_tables) > 0L) do.call(rbind, metric_tables) else data.frame()
+  effect_size_recovery <- .mgcfa_effect_size_recovery(effect_size_metrics)
   latent_effects <- if (length(latent_tables) > 0L) do.call(rbind, latent_tables) else data.frame()
   latent_group_stats <- if (length(latent_stats_tables) > 0L) do.call(rbind, latent_stats_tables) else data.frame()
   class_effects <- if (length(class_tables) > 0L) do.call(rbind, class_tables) else data.frame()
@@ -1950,6 +1973,12 @@ mgcfa_bias_effects <- function(
   }
   if (nrow(observed_group_stats) > 0L) {
     observed_group_stats <- .mgcfa_format_numeric_df(observed_group_stats, digits = digits, rounding = rounding)
+  }
+  if (nrow(effect_size_metrics) > 0L) {
+    effect_size_metrics <- .mgcfa_format_numeric_df(effect_size_metrics, digits = digits, rounding = rounding)
+  }
+  if (nrow(effect_size_recovery) > 0L) {
+    effect_size_recovery <- .mgcfa_format_numeric_df(effect_size_recovery, digits = digits, rounding = rounding)
   }
   if (nrow(latent_effects) > 0L) {
     latent_effects <- .mgcfa_format_numeric_df(latent_effects, digits = digits, rounding = rounding)
@@ -1966,6 +1995,8 @@ mgcfa_bias_effects <- function(
     groups = if (exists("group_pair")) c(group_pair$reference, group_pair$focal) else NULL,
     observed_effects = observed_effects,
     observed_group_stats = observed_group_stats,
+    effect_size_metrics = effect_size_metrics,
+    effect_size_recovery = effect_size_recovery,
     latent_effects = latent_effects,
     latent_group_stats = latent_group_stats,
     class_effects = class_effects,
@@ -1993,6 +2024,14 @@ print.mgcfa_bias_effects <- function(x, ...) {
   if (!is.null(x$observed_effects) && nrow(x$observed_effects) > 0L) {
     cat("\nObserved bias effects (signed dMACS-style deltas)\n")
     print(utils::head(x$observed_effects, n = 12L), row.names = FALSE)
+  }
+  if (!is.null(x$effect_size_metrics) && nrow(x$effect_size_metrics) > 0L) {
+    cat("\nBias effect-size metrics (dMACS, dMACS_Signed, SDI2/UDI2)\n")
+    print(utils::head(x$effect_size_metrics, n = 12L), row.names = FALSE)
+  }
+  if (!is.null(x$effect_size_recovery) && nrow(x$effect_size_recovery) > 0L) {
+    cat("\nEffect-size recovery (Adjusted - Biased)\n")
+    print(utils::head(x$effect_size_recovery, n = 12L), row.names = FALSE)
   }
   if (!is.null(x$latent_effects) && nrow(x$latent_effects) > 0L) {
     cat("\nLatent mean/SD comparisons (biased vs adjusted)\n")
@@ -2197,6 +2236,230 @@ print.mgcfa_bias_effects <- function(x, ...) {
     )
   }
   do.call(rbind, out)
+}
+
+.mgcfa_effect_size_table <- function(
+  fit,
+  weights,
+  ref_group,
+  focal_group,
+  step,
+  model_label
+) {
+  est <- tryCatch(lavaan::lavInspect(fit, "est"), error = function(e) NULL)
+  gl <- tryCatch(as.character(lavaan::lavInspect(fit, "group.label")), error = function(e) NULL)
+  nobs <- tryCatch(as.numeric(lavaan::lavInspect(fit, "nobs")), error = function(e) NULL)
+  if (is.null(est) || is.null(gl) || !is.list(est) || length(gl) < 2L) {
+    return(data.frame())
+  }
+
+  g_ref <- match(ref_group, gl)
+  g_foc <- match(focal_group, gl)
+  if (is.na(g_ref) || is.na(g_foc)) {
+    return(data.frame())
+  }
+  est_ref <- est[[g_ref]]
+  est_foc <- est[[g_foc]]
+  if (is.null(est_ref$lambda) || is.null(est_foc$lambda) ||
+      is.null(est_ref$nu) || is.null(est_foc$nu)) {
+    return(data.frame())
+  }
+
+  lambda_ref <- as.matrix(est_ref$lambda)
+  lambda_foc <- as.matrix(est_foc$lambda)
+  nu_ref <- as.numeric(est_ref$nu)
+  nu_foc <- as.numeric(est_foc$nu)
+  ov_names <- rownames(lambda_ref) %||% names(nu_ref)
+  if (is.null(ov_names)) {
+    ov_names <- paste0("V", seq_len(nrow(lambda_ref)))
+  }
+  rownames(lambda_ref) <- ov_names
+  rownames(lambda_foc) <- ov_names
+  names(nu_ref) <- ov_names
+  names(nu_foc) <- ov_names
+
+  lv_ref <- colnames(lambda_ref) %||% paste0("LV", seq_len(ncol(lambda_ref)))
+  lv_foc <- colnames(lambda_foc) %||% paste0("LV", seq_len(ncol(lambda_foc)))
+  common_lv <- intersect(lv_ref, lv_foc)
+  if (length(common_lv) == 0L) {
+    return(data.frame())
+  }
+  colnames(lambda_ref) <- lv_ref
+  colnames(lambda_foc) <- lv_foc
+  lambda_ref <- lambda_ref[, common_lv, drop = FALSE]
+  lambda_foc <- lambda_foc[, common_lv, drop = FALSE]
+
+  alpha_raw <- est_foc$alpha %||% rep(0, ncol(lambda_foc))
+  alpha_foc <- as.numeric(alpha_raw)
+  names(alpha_foc) <- names(alpha_raw) %||% common_lv
+  alpha_foc <- alpha_foc[common_lv]
+  alpha_foc[is.na(alpha_foc)] <- 0
+
+  psi_foc <- as.matrix(est_foc$psi %||% diag(length(common_lv)))
+  rownames(psi_foc) <- rownames(psi_foc) %||% common_lv
+  colnames(psi_foc) <- colnames(psi_foc) %||% common_lv
+  if (!all(common_lv %in% rownames(psi_foc)) || !all(common_lv %in% colnames(psi_foc))) {
+    psi_foc <- diag(length(common_lv))
+    rownames(psi_foc) <- common_lv
+    colnames(psi_foc) <- common_lv
+  } else {
+    psi_foc <- psi_foc[common_lv, common_lv, drop = FALSE]
+  }
+
+  # Item/composite SDs from implied observed moments.
+  obs_stats <- .mgcfa_model_observed_stats(fit, weights = weights, model_label = model_label)
+  if (nrow(obs_stats) == 0L) {
+    return(data.frame())
+  }
+
+  if (is.null(nobs) || length(nobs) != length(gl) || any(!is.finite(nobs))) {
+    nobs <- rep(1, length(gl))
+  }
+  n_ref <- nobs[[g_ref]]
+  n_foc <- nobs[[g_foc]]
+
+  out <- list()
+  out_i <- 0L
+  for (nm in names(weights)) {
+    w <- as.numeric(weights[[nm]])
+    names(w) <- names(weights[[nm]])
+    w <- w[ov_names]
+    w[is.na(w)] <- 0
+
+    delta_nu <- nu_ref - nu_foc
+    delta_lambda <- lambda_ref - lambda_foc
+    a <- sum(w * delta_nu)
+    b <- as.numeric(colSums(w * delta_lambda))
+
+    mu_delta <- a + sum(b * alpha_foc)
+    var_delta <- as.numeric(t(b) %*% psi_foc %*% b)
+    if (!is.finite(var_delta) || var_delta < 0) {
+      var_delta <- 0
+    }
+    sd_delta <- sqrt(var_delta)
+    abs_expect <- .mgcfa_abs_normal_expectation(mu = mu_delta, sd = sd_delta)
+
+    sd_ref <- obs_stats$sd[obs_stats$composite == nm & obs_stats$group == ref_group][1]
+    sd_foc <- obs_stats$sd[obs_stats$composite == nm & obs_stats$group == focal_group][1]
+    sd_pool <- .mgcfa_two_group_pooled_sd(
+      sd1 = sd_ref,
+      sd2 = sd_foc,
+      n1 = n_ref,
+      n2 = n_foc
+    )
+
+    dmacs <- if (is.finite(sd_pool) && sd_pool > 0) sqrt(mu_delta^2 + var_delta) / sd_pool else NA_real_
+    dmacs_signed <- if (is.finite(sd_pool) && sd_pool > 0) mu_delta / sd_pool else NA_real_
+    dmacs_true <- if (is.finite(dmacs_signed)) sign(dmacs_signed) * dmacs else NA_real_
+
+    sdi2 <- if (is.finite(sd_foc) && sd_foc > 0) mu_delta / sd_foc else NA_real_
+    udi2 <- if (is.finite(sd_foc) && sd_foc > 0) abs_expect / sd_foc else NA_real_
+    sudi2 <- if (is.finite(sdi2)) sign(sdi2) * udi2 else NA_real_
+
+    out_i <- out_i + 1L
+    out[[out_i]] <- data.frame(
+      step = step,
+      model = model_label,
+      comparison = paste(ref_group, "-", focal_group),
+      outcome = nm,
+      dmacs = as.numeric(dmacs),
+      dmacs_signed = as.numeric(dmacs_signed),
+      dmacs_true = as.numeric(dmacs_true),
+      sdi2 = as.numeric(sdi2),
+      udi2 = as.numeric(udi2),
+      sudi2 = as.numeric(sudi2),
+      delta_mean = as.numeric(mu_delta),
+      delta_sd = as.numeric(sd_delta),
+      denom_pooled_sd = as.numeric(sd_pool),
+      denom_focal_sd = as.numeric(sd_foc),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (out_i == 0L) {
+    return(data.frame())
+  }
+  out_df <- do.call(rbind, out)
+
+  agg <- data.frame(
+    step = step,
+    model = model_label,
+    comparison = paste(ref_group, "-", focal_group),
+    outcome = "Average Across Outcomes",
+    dmacs = mean(out_df$dmacs, na.rm = TRUE),
+    dmacs_signed = mean(out_df$dmacs_signed, na.rm = TRUE),
+    dmacs_true = mean(out_df$dmacs_true, na.rm = TRUE),
+    sdi2 = mean(out_df$sdi2, na.rm = TRUE),
+    udi2 = mean(out_df$udi2, na.rm = TRUE),
+    sudi2 = mean(out_df$sudi2, na.rm = TRUE),
+    delta_mean = mean(out_df$delta_mean, na.rm = TRUE),
+    delta_sd = mean(out_df$delta_sd, na.rm = TRUE),
+    denom_pooled_sd = mean(out_df$denom_pooled_sd, na.rm = TRUE),
+    denom_focal_sd = mean(out_df$denom_focal_sd, na.rm = TRUE),
+    stringsAsFactors = FALSE
+  )
+  rbind(out_df, agg)
+}
+
+.mgcfa_two_group_pooled_sd <- function(sd1, sd2, n1, n2) {
+  sd1 <- as.numeric(sd1)
+  sd2 <- as.numeric(sd2)
+  n1 <- as.numeric(n1)
+  n2 <- as.numeric(n2)
+  if (!is.finite(sd1) || !is.finite(sd2) || !is.finite(n1) || !is.finite(n2)) {
+    return(NA_real_)
+  }
+  if (n1 <= 1 || n2 <= 1) {
+    return(sqrt((sd1^2 + sd2^2) / 2))
+  }
+  sqrt(((n1 - 1) * sd1^2 + (n2 - 1) * sd2^2) / (n1 + n2 - 2))
+}
+
+.mgcfa_abs_normal_expectation <- function(mu, sd) {
+  mu <- as.numeric(mu)
+  sd <- as.numeric(sd)
+  if (!is.finite(mu) || !is.finite(sd) || sd < 0) {
+    return(NA_real_)
+  }
+  if (sd == 0) {
+    return(abs(mu))
+  }
+  z <- mu / sd
+  sd * sqrt(2 / pi) * exp(-0.5 * z^2) + mu * (2 * stats::pnorm(z) - 1)
+}
+
+.mgcfa_effect_size_recovery <- function(effect_size_metrics) {
+  if (is.null(effect_size_metrics) || nrow(effect_size_metrics) == 0L) {
+    return(data.frame())
+  }
+  need_cols <- c("step", "comparison", "outcome", "model", "dmacs", "dmacs_signed", "dmacs_true", "sdi2", "udi2", "sudi2")
+  if (!all(need_cols %in% names(effect_size_metrics))) {
+    return(data.frame())
+  }
+  b <- effect_size_metrics[effect_size_metrics$model == "Biased (Non-Partial)", , drop = FALSE]
+  a <- effect_size_metrics[effect_size_metrics$model == "Bias-Adjusted (Selected)", , drop = FALSE]
+  if (nrow(b) == 0L || nrow(a) == 0L) {
+    return(data.frame())
+  }
+  key <- c("step", "comparison", "outcome")
+  m <- merge(
+    b,
+    a,
+    by = key,
+    suffixes = c("_biased", "_adjusted")
+  )
+  data.frame(
+    step = m$step,
+    comparison = m$comparison,
+    outcome = m$outcome,
+    dmacs_change = m$dmacs_adjusted - m$dmacs_biased,
+    dmacs_signed_change = m$dmacs_signed_adjusted - m$dmacs_signed_biased,
+    dmacs_true_change = m$dmacs_true_adjusted - m$dmacs_true_biased,
+    sdi2_change = m$sdi2_adjusted - m$sdi2_biased,
+    udi2_change = m$udi2_adjusted - m$udi2_biased,
+    sudi2_change = m$sudi2_adjusted - m$sudi2_biased,
+    stringsAsFactors = FALSE
+  )
 }
 
 .mgcfa_group_d_from_stats <- function(stats_df, ref_group, focal_group) {

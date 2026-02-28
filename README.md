@@ -202,6 +202,10 @@ print(bias_out)
 # Signed dMACS-style bias effects on observed outcomes
 head(bias_out$observed_effects)
 
+# Published bias effect-size families:
+# dMACS, dMACS_Signed, dMACS_True, SDI2, UDI2, SUDI2
+head(bias_out$effect_size_metrics)
+
 # Per-group and pooled latent means/SDs for biased vs adjusted models
 head(bias_out$latent_group_stats)
 ```

@@ -40,6 +40,8 @@ test_that("bias effects are produced for recovered scalar stage", {
   expect_s3_class(be, "mgcfa_bias_effects")
   expect_true(nrow(be$observed_effects) >= 1L)
   expect_true("dmacs_signed" %in% names(be$observed_effects))
+  expect_true(nrow(be$effect_size_metrics) >= 1L)
+  expect_true(all(c("dmacs", "dmacs_signed", "dmacs_true", "sdi2", "udi2", "sudi2") %in% names(be$effect_size_metrics)))
   expect_true(nrow(be$latent_effects) >= 1L)
   expect_true(nrow(be$latent_group_stats) >= 2L)
   expect_true(nrow(be$freed_parameters) >= 1L)

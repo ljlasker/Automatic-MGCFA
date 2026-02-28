@@ -49,5 +49,8 @@ tables for observed and latent bias effects.
 Produces signed bias-effect contrasts (dMACS-style deltas) by comparing the
 failed non-partial model at each recovered step to the selected bias-adjusted
 model. Supports observed item/composite outcomes and latent mean/SD
-comparisons, with optional decomposition by freed parameter class.
+comparisons, with optional decomposition by freed parameter class. Also
+returns item/composite bias effect-size families used in JLLJ RPubs and the
+cited literature, including \code{dMACS}, \code{dMACS_Signed},
+\code{dMACS_True}, \code{SDI2}, \code{UDI2}, and \code{SUDI2}.
 }
