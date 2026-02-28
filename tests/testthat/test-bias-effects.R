@@ -45,6 +45,13 @@ test_that("bias effects are produced for recovered scalar stage", {
   expect_true(nrow(be$latent_effects) >= 1L)
   expect_true(nrow(be$latent_group_stats) >= 2L)
   expect_true(nrow(be$freed_parameters) >= 1L)
+
+  be_ci <- suppressWarnings(
+    mgcfa_bias_effects(out, include_items = FALSE, ci = TRUE, n_boot = 20L, boot_seed = 123)
+  )
+  expect_true(nrow(be_ci$effect_size_metrics_ci) >= 1L)
+  expect_true("dmacs_ci_low" %in% names(be_ci$effect_size_metrics_ci))
+  expect_true("dmacs_change_ci_low" %in% names(be_ci$effect_size_recovery_ci))
 })
 
 test_that("step-specific decision rules are accepted", {

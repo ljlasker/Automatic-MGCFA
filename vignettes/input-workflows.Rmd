@@ -1,0 +1,70 @@
+---
+title: "Input Workflows"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Input Workflows}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+```{r}
+library(AutomaticMGCFA)
+```
+
+## Raw Data
+
+```{r}
+inp_raw <- mgcfa_prepare_input(data = dat, group = "grp")
+print(inp_raw)
+```
+
+## Covariance Matrices
+
+```{r}
+inp_cov <- mgcfa_prepare_input(
+  sample_cov = cov_list,
+  sample_mean = mean_list,
+  sample_nobs = n_list,
+  group_labels = c("g1", "g2")
+)
+```
+
+## Correlation Matrices
+
+```{r}
+inp_cor <- mgcfa_prepare_input(
+  sample_cor = cor_list,
+  sample_mean = mean_list,
+  sample_nobs = n_list,
+  sample_sd = sd_list
+)
+```
+
+## Correlations Without SDs (Auto Unit SD)
+
+```{r}
+inp_cor_unit <- mgcfa_prepare_input(
+  sample_cor = cor_list,
+  sample_mean = mean_list,
+  sample_nobs = n_list,
+  cor_without_sd_action = "auto_unit"
+)
+inp_cor_unit$notes
+```
+
+## Compare Raw vs Summary Results
+
+```{r}
+out_raw <- mgcfa_auto(model_type = "custom", model = "F =~ x1 + x2 + x3 + x4", input = inp_raw)
+out_sum <- mgcfa_auto(model_type = "custom", model = "F =~ x1 + x2 + x3 + x4", input = inp_cov)
+cmp <- mgcfa_compare_results(out_raw, out_sum)
+head(cmp)
+```

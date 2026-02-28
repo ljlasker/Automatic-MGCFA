@@ -1,0 +1,30 @@
+template:
+  bootstrap: 5
+
+home:
+  title: AutomaticMGCFA
+  description: Automatic multi-group CFA and SEM invariance workflows.
+
+reference:
+  - title: Core Analysis
+    contents:
+      - mgcfa_auto
+      - mgcfa_run_simple
+      - mgcfa_build_model
+      - mgcfa_make_summary
+      - mgcfa_prepare_input
+      - mgcfa_help_inputs
+  - title: Reporting and Visualization
+    contents:
+      - mgcfa_tidy_fit
+      - mgcfa_plot_fit
+      - mgcfa_report
+      - mgcfa_compare_results
+  - title: Bias Effect Sizes
+    contents:
+      - mgcfa_bias_effects
+
+navbar:
+  structure:
+    left: [home, reference, articles]
+    right: [github]

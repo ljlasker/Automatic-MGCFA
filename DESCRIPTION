@@ -20,5 +20,9 @@ Imports:
     psych
 Suggests:
     ggplot2,
+    knitr,
+    pkgdown,
+    rmarkdown,
     testthat (>= 3.0.0)
+VignetteBuilder: knitr
 Config/testthat/edition: 3

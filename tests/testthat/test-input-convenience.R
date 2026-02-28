@@ -92,3 +92,44 @@ test_that("mgcfa_help_inputs returns guidance table", {
   expect_true(is.data.frame(tbl))
   expect_true(all(c("scenario", "minimal_requirements") %in% names(tbl)))
 })
+
+test_that("mgcfa_run_simple and mgcfa_report produce expected outputs", {
+  dat <- make_easy_input_data(n = 300L, seed = 88)
+  out <- mgcfa_run_simple(
+    model = "F =~ x1 + x2 + x3 + x4",
+    data = dat,
+    group = "grp",
+    include_steps = c("configural", "metric", "scalar"),
+    partial_auto_search = "never",
+    partial_failure_criterion = "none"
+  )
+  expect_s3_class(out, "mgcfa_result")
+
+  rep <- mgcfa_report(out, include_plots = FALSE)
+  expect_s3_class(rep, "mgcfa_report")
+  expect_true(is.data.frame(rep$overview))
+  expect_true(is.data.frame(rep$tidy_fit))
+  expect_true(is.data.frame(rep$decision_trace))
+})
+
+test_that("ordered workflow sets categorical estimator and thresholds in scalar stage", {
+  dat <- make_easy_input_data(n = 320L, seed = 99)
+  ord_vars <- c("x1", "x2", "x3", "x4")
+  for (v in ord_vars) {
+    dat[[v]] <- ordered(as.integer(cut(dat[[v]], breaks = 5)))
+  }
+  out <- mgcfa_run_simple(
+    model = "F =~ x1 + x2 + x3 + x4",
+    data = dat,
+    group = "grp",
+    ordered = ord_vars,
+    include_steps = c("configural", "metric", "scalar"),
+    partial_auto_search = "never",
+    partial_failure_criterion = "none",
+    stop_at_first_unacceptable = FALSE
+  )
+  expect_s3_class(out, "mgcfa_result")
+  est <- tryCatch(lavaan::lavInspect(out$fits$configural, "options")$estimator, error = function(e) NA_character_)
+  expect_true(est %in% c("WLSMV", "DWLS"))
+  expect_true(!is.null(out$step_failures$scalar) || "scalar" %in% names(out$fits))
+})

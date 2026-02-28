@@ -17,7 +17,7 @@ remotes::install_github("ljlasker/Automatic-MGCFA")
 - Fit invariance models from raw data (`data` + `group`).
 - Fit invariance models from summary inputs (`sample_cov`, `sample_mean`, `sample_nobs`).
 - Build models from custom lavaan syntax, a single-factor template, or thresholded EFA/PCA loadings.
-- Run staged invariance testing across `configural`, `metric`, `scalar`, `strict`, `lv.variances`, `lv.covariances`, `residual.covariances`, and `means` by default (with optional `regressions` stage).
+- Run staged invariance testing across `configural`, `metric`, `scalar`, `strict`, `lv.variances`, `lv.covariances`, `residual.covariances`, `regressions`, and `means` by default.
 - For post-strict stages (`lv.variances`, `lv.covariances`, `residual.covariances`, `regressions`, `means`), automatically use `strict` as the baseline when acceptable, otherwise fall back to `scalar`.
 - Detect failed constrained stages using chi-square change p-value or delta CFI.
 - Run automatic partial-invariance search at failed stages (prompt, never, or always).
@@ -85,8 +85,30 @@ out_cor <- mgcfa_auto(
   include_steps = c("configural", "metric")
 )
 
-# 3) Quick guidance table
+# 3) Ordered indicators (threshold invariance workflow)
+out_ord <- mgcfa_run_simple(
+  model = "g =~ i1 + i2 + i3 + i4",
+  data = dat_ord,
+  group = "grp",
+  ordered = c("i1", "i2", "i3", "i4")
+)
+
+# 4) Quick guidance table
 mgcfa_help_inputs()
+```
+
+## Simplest End-to-End Runner
+
+```r
+out <- mgcfa_run_simple(
+  model = "g =~ x1 + x2 + x3 + x4",
+  data = dat,
+  group = "grp",
+  partial_auto_search = "always"
+)
+
+rep <- mgcfa_report(out, include_plots = TRUE)
+print(rep)
 ```
 
 ## Alternative Partial-Search Criteria
@@ -160,6 +182,14 @@ out_multi_rule <- mgcfa_auto(
   ),
   partial_search_rule_policy = "at_least",
   partial_search_rule_min = 2L
+)
+
+# Enable true parallel candidate evaluation for large partial searches
+out_parallel <- mgcfa_auto(
+  ...,
+  partial_search_parallel = TRUE,
+  partial_search_n_cores = 4,
+  partial_search_stop_on_accept = FALSE
 )
 
 # Step-specific rules (example: scalar uses any-of-two rules)
@@ -240,6 +270,10 @@ head(bias_out$observed_effects)
 # Published bias effect-size families:
 # dMACS, dMACS_Signed, dMACS_True, SDI2, UDI2, SUDI2
 head(bias_out$effect_size_metrics)
+
+# Optional bootstrap confidence intervals for effect-size metrics
+bias_out_ci <- mgcfa_bias_effects(out, ci = TRUE, n_boot = 200, conf_level = 0.95)
+head(bias_out_ci$effect_size_metrics_ci)
 
 # Per-group and pooled latent means/SDs for biased vs adjusted models
 head(bias_out$latent_group_stats)
